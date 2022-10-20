@@ -17,6 +17,9 @@ _deps
 .vscode/
 *.code-workspace
 
+# VS
+.vs/
+
 # C++
 # Prerequisites
 *.d
