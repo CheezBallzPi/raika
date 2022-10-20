@@ -1,3 +1,6 @@
+build/
+
+# CMake
 CMakeLists.txt.user
 CMakeCache.txt
 CMakeFiles
@@ -10,6 +13,11 @@ compile_commands.json
 CTestTestfile.cmake
 _deps
 
+# VSCode
+.vscode/
+*.code-workspace
+
+# C++
 # Prerequisites
 *.d
 
@@ -42,3 +50,4 @@ _deps
 *.exe
 *.out
 *.app
+# finish C++.gitignore
