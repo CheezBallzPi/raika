@@ -1,4 +1,66 @@
 #include <windows.h>
+#include <stdint.h>
+
+static bool running;
+static BITMAPINFO bitmapInfo;
+static VOID *bitmapMemory;
+static int bitmapWidth;
+static int bitmapHeight;
+static int bytesPerPixel = 4;
+
+static void RenderGradient(int xoffset, int yoffset) {
+  int pitch = bitmapWidth * bytesPerPixel;
+  uint8_t *row = (uint8_t *) bitmapMemory;
+  for(int y = 0; y < bitmapHeight; ++y) {
+      uint32_t *pixel = (uint32_t *) row;
+      for(int x = 0; x < bitmapWidth; ++x) {
+        uint8_t blue = (x + xoffset);
+        uint8_t green = (y + yoffset);
+        uint8_t red = (xoffset + yoffset);
+
+        *pixel++ = (red << 16) | (green << 8) | (blue);
+      }
+      row += pitch;
+  }
+}
+
+static void ResizeDIBSection(int width, int height) {
+
+  if(bitmapMemory) {
+    VirtualFree(bitmapMemory, NULL, MEM_RELEASE);
+  }
+
+  bitmapInfo.bmiHeader.biSize = sizeof(bitmapInfo.bmiHeader);
+  bitmapInfo.bmiHeader.biWidth = width;
+  bitmapInfo.bmiHeader.biHeight = height;
+  bitmapInfo.bmiHeader.biPlanes = 1;
+  bitmapInfo.bmiHeader.biBitCount = 32;
+  bitmapInfo.bmiHeader.biCompression = BI_RGB;
+
+  int bitmapMemSize = bytesPerPixel * width * height;
+  bitmapMemory = VirtualAlloc(
+    NULL, 
+    bitmapMemSize,
+    MEM_COMMIT,
+    PAGE_READWRITE
+  );
+
+  bitmapWidth = width;
+  bitmapHeight = height;
+
+  RenderGradient(0, 0);
+}
+
+static void UpdateDrawWindow(HDC context, RECT *windowRect, int x, int y, int width, int height) {
+  StretchDIBits(
+    context,
+    0, 0, bitmapWidth, bitmapHeight,
+    0, 0, windowRect->right - windowRect->left, windowRect->bottom - windowRect->top,
+    bitmapMemory, &bitmapInfo,
+    DIB_RGB_COLORS,
+    SRCCOPY
+  );
+}
 
 LRESULT MainWindowCallback(
   HWND Window,
@@ -11,14 +73,22 @@ LRESULT MainWindowCallback(
   switch(Message) {
     case WM_SIZE:
     {
+      RECT clientRect;
+      GetClientRect(Window, &clientRect);
+      ResizeDIBSection(
+        clientRect.right - clientRect.left, 
+        clientRect.bottom - clientRect.top
+      );
       OutputDebugString("WM_SIZE\n");
     } break;
     case WM_DESTROY:
     {
+      running = false;
       OutputDebugString("WM_DESTROY\n");
     } break;
     case WM_CLOSE:
     {
+      running = false;
       OutputDebugString("WM_CLOSE\n");
     } break;
     case WM_ACTIVATEAPP:
@@ -29,13 +99,15 @@ LRESULT MainWindowCallback(
     {
       PAINTSTRUCT paint;
       HDC deviceContext = BeginPaint(Window, &paint);
-      PatBlt(
+      RECT clientRect;
+      GetClientRect(Window, &clientRect);
+      UpdateDrawWindow(
         deviceContext, 
+        &clientRect,
         paint.rcPaint.left, 
         paint.rcPaint.top, 
         paint.rcPaint.right - paint.rcPaint.left,
-        paint.rcPaint.bottom - paint.rcPaint.top,
-        BLACKNESS
+        paint.rcPaint.bottom - paint.rcPaint.top
       );
       EndPaint(Window, &paint);
     } break;
@@ -54,8 +126,6 @@ int APIENTRY WinMain(
   LPSTR     lpCmdLine,
   int       nShowCmd
 ) {
-    MessageBoxA(0, "Hello World!", "raika", MB_OK|MB_ICONINFORMATION);
-
     WNDCLASSEX WindowClass = {};
     WindowClass.cbSize = sizeof(WNDCLASSEX);
     WindowClass.style = CS_OWNDC|CS_VREDRAW|CS_HREDRAW;
@@ -82,13 +152,38 @@ int APIENTRY WinMain(
         MSG message;
         BOOL result;
 
-        while((result = GetMessage(&message,0,0,0)) != 0) {
-          if (result == -1) {
-            // Error
-          } else {
-            TranslateMessage(&message);
-            DispatchMessage(&message);
+        running = true;
+
+        int xoffset = 0;
+        int yoffset = 0;
+
+        while(running) {
+          while(PeekMessage(&message, 0, 0, 0, PM_REMOVE)) {
+            if (message.message == WM_QUIT) {
+              running = false;
+            } else {
+              TranslateMessage(&message);
+              DispatchMessage(&message);
+            }
           }
+
+          RenderGradient(xoffset, yoffset);
+
+          HDC deviceContext = GetDC(WindowHandle);
+          RECT clientRect;
+          GetClientRect(WindowHandle, &clientRect);
+          UpdateDrawWindow(
+            deviceContext, 
+            &clientRect,
+            0, 
+            0, 
+            clientRect.right - clientRect.left,
+            clientRect.bottom - clientRect.top
+          );
+          ReleaseDC(WindowHandle, deviceContext);
+
+          ++xoffset;
+          ++yoffset;
         }
       } else {
         // Handle failed
