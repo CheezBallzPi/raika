@@ -1,6 +1,8 @@
 #include <windows.h>
 #include <stdint.h>
 #include <xinput.h>
+#include <mmdeviceapi.h>
+#include <audioclient.h>
 
 struct offscreen_buffer {
   BITMAPINFO info;
@@ -16,24 +18,78 @@ struct window_dimension {
   int height; 
 };
 
+// globals
+static bool running;
+static offscreen_buffer globalbackbuffer;
+static IAudioRenderClient *audioRenderClient;
+
 // Manually load XInput functions
 #define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pState)
 #define X_INPUT_SET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_VIBRATION* pVibration)
 typedef X_INPUT_GET_STATE(x_input_get_state);
 typedef X_INPUT_SET_STATE(x_input_set_state);
-X_INPUT_GET_STATE(XInputGetStateStub) { return 0; }
-X_INPUT_SET_STATE(XInputSetStateStub) { return 0; }
+X_INPUT_GET_STATE(XInputGetStateStub) { return ERROR_NOT_SUPPORTED; }
+X_INPUT_SET_STATE(XInputSetStateStub) { return ERROR_NOT_SUPPORTED; }
 static x_input_get_state *XInputGetState_;
 static x_input_set_state *XInputSetState_;
 #define XInputGetState XInputGetState_
 #define XInputSetState XInputSetState_
 
 static void loadXInput() {
-  HMODULE lib = LoadLibraryA("xinput1_3.dll");
+  HMODULE lib = LoadLibraryA("xinput1_4.dll");
+  if(!lib) {
+    lib = LoadLibraryA("xinput1_3.dll");
+  }
   if(lib) {
     XInputGetState = (x_input_get_state *) GetProcAddress(lib, "XInputGetState");
     XInputSetState = (x_input_set_state *) GetProcAddress(lib, "XInputSetState");
   }
+}
+
+static HRESULT initAudio(REFERENCE_TIME bufferDuration, int32_t samplesPerSec) {
+  HRESULT hr;
+  IMMDeviceEnumerator *deviceEnumerator;
+  IMMDevice *mmDevice;
+  IAudioClient *audioClient;
+
+  // Obtain Device Enumerator
+  if(FAILED(hr = CoCreateInstance(
+    CLSID_MMDeviceEnumerator, NULL,
+    CLSCTX_ALL, IID_IMMDeviceEnumerator,
+    (LPVOID *) deviceEnumerator
+  ))) { return hr; };
+  // Obtain Device
+  // Just use the default one:
+  if(FAILED(hr = deviceEnumerator->GetDefaultAudioEndpoint(
+    eRender, eConsole, &mmDevice
+  ))) { return hr; };
+  // Obtain Audio Client
+  if(FAILED(hr = mmDevice->Activate(
+    IID_IAudioClient,
+    CLSCTX_ALL,
+    NULL,
+    (void **) &audioClient
+  ))) { return hr; };
+  // Initialize Audio Client
+  // First we need a Wave Format
+  WAVEFORMATEX *waveFormat;
+  waveFormat->wFormatTag = WAVE_FORMAT_PCM;
+  waveFormat->nChannels = 2;
+  waveFormat->nSamplesPerSec = samplesPerSec;
+  waveFormat->wBitsPerSample = 16;
+  waveFormat->nBlockAlign = (waveFormat->nChannels * waveFormat->wBitsPerSample) / 8;
+  waveFormat->nAvgBytesPerSec = waveFormat->nSamplesPerSec * waveFormat->nBlockAlign;
+  waveFormat->cbSize = 0;
+
+  if(FAILED(hr = audioClient->Initialize(
+    AUDCLNT_SHAREMODE_SHARED,
+    0, bufferDuration, 0,
+    waveFormat, NULL
+  ))) { return hr; }
+  // Obtain Render Client
+  if(FAILED(hr = audioClient->GetService(
+    IID_IAudioRenderClient, (void **) &audioRenderClient
+  ))) { return hr; };
 }
 
 static window_dimension getWindowDimension(HWND Window) {
@@ -46,9 +102,6 @@ static window_dimension getWindowDimension(HWND Window) {
 
   return(out);
 }
-
-static bool running;
-static offscreen_buffer globalbackbuffer;
 
 static void RenderGradient(offscreen_buffer *buffer, int xoffset, int yoffset) {
   uint8_t *row = (uint8_t *) buffer->memory;
@@ -146,6 +199,11 @@ LRESULT MainWindowCallback(
           case 'D':
           OutputDebugString("D\n");
           break;
+        }
+        
+        bool altPressed = ((lParam & (1 << 29)) != 0);
+        if(altPressed && keycode == VK_F4) {
+          running = false;
         }
       }
     } break;
