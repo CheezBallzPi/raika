@@ -80,7 +80,7 @@ static HRESULT initAudio(REFERENCE_TIME bufferDuration, int32_t samplesPerSec) {
   waveFormat->nBlockAlign = (waveFormat->nChannels * waveFormat->wBitsPerSample) / 8;
   waveFormat->nAvgBytesPerSec = waveFormat->nSamplesPerSec * waveFormat->nBlockAlign;
   waveFormat->cbSize = 0;
-
+  // Throw that into the client
   if(FAILED(hr = audioClient->Initialize(
     AUDCLNT_SHAREMODE_SHARED,
     0, bufferDuration, 0,
