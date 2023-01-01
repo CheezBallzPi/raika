@@ -1,26 +1,28 @@
+#include "raika.cpp"
+
 #include <windows.h>
 #include <stdint.h>
 #include <xinput.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 
-struct offscreen_buffer {
+
+struct win32_graphics_buffer {
   BITMAPINFO info;
   VOID *memory;
   int width;
   int height;
   int pitch;
-  int bytesPerPixel;
 };
 
-struct window_dimension {
+struct win32_window_dimension {
   int width;
   int height; 
 };
 
 // globals
 static bool running;
-static offscreen_buffer globalbackbuffer;
+static win32_graphics_buffer globalGraphicsBuffer;
 static IAudioRenderClient *audioRenderClient;
 
 // Manually load XInput functions
@@ -46,7 +48,10 @@ static void loadXInput() {
   }
 }
 
-static HRESULT initAudio(REFERENCE_TIME bufferDuration, int32_t samplesPerSec) {
+static HRESULT initAudio(
+  REFERENCE_TIME bufferDuration, 
+  int32_t samplesPerSec
+) {
   HRESULT hr;
   IMMDeviceEnumerator *deviceEnumerator;
   IMMDevice *mmDevice;
@@ -92,8 +97,10 @@ static HRESULT initAudio(REFERENCE_TIME bufferDuration, int32_t samplesPerSec) {
   ))) { return hr; };
 }
 
-static window_dimension getWindowDimension(HWND Window) {
-  window_dimension out;
+static win32_window_dimension getWindowDimension(
+  HWND Window
+) {
+  win32_window_dimension out;
 
   RECT clientRect;
   GetClientRect(Window, &clientRect);
@@ -103,22 +110,11 @@ static window_dimension getWindowDimension(HWND Window) {
   return(out);
 }
 
-static void RenderGradient(offscreen_buffer *buffer, int xoffset, int yoffset) {
-  uint8_t *row = (uint8_t *) buffer->memory;
-  for(int y = 0; y < buffer->height; ++y) {
-      uint32_t *pixel = (uint32_t *) row;
-      for(int x = 0; x < buffer->width; ++x) {
-        uint8_t blue = (x + xoffset);
-        uint8_t green = (y + yoffset);
-        uint8_t red = (xoffset + yoffset);
-
-        *pixel++ = (red << 16) | (green << 8) | (blue);
-      }
-      row += buffer->pitch;
-  }
-}
-
-static void ResizeDIBSection(offscreen_buffer *buffer, int width, int height) {
+static void ResizeDIBSection(
+  win32_graphics_buffer *buffer, 
+  int width, 
+  int height
+) {
 
   if(buffer->memory) {
     VirtualFree(buffer->memory, NULL, MEM_RELEASE);
@@ -133,9 +129,9 @@ static void ResizeDIBSection(offscreen_buffer *buffer, int width, int height) {
 
   buffer->width = width;
   buffer->height = height;
-  buffer->bytesPerPixel = 4;
 
-  int bitmapMemSize = buffer->bytesPerPixel * width * height;
+  int bytesPerPixel = 4;
+  int bitmapMemSize = bytesPerPixel * width * height;
   buffer->memory = VirtualAlloc(
     NULL, 
     bitmapMemSize,
@@ -143,12 +139,19 @@ static void ResizeDIBSection(offscreen_buffer *buffer, int width, int height) {
     PAGE_READWRITE
   );
 
-  buffer->pitch = buffer->width * buffer->bytesPerPixel;
-
-  RenderGradient(buffer, 0, 0);
+  buffer->pitch = buffer->width * bytesPerPixel;
 }
 
-static void CopyBufferToWindow(HDC context, int winWidth, int winHeight, offscreen_buffer *buffer, int x, int y, int width, int height) {
+static void CopyBufferToWindow(
+  HDC context, 
+  int winWidth, 
+  int winHeight, 
+  win32_graphics_buffer *buffer, 
+  int x, 
+  int y, 
+  int width, 
+  int height
+) {
   StretchDIBits(
     context,
     0, 0, winWidth, winHeight,
@@ -218,11 +221,11 @@ LRESULT MainWindowCallback(
     {
       PAINTSTRUCT paint;
       HDC deviceContext = BeginPaint(Window, &paint);
-      window_dimension dim = getWindowDimension(Window);
+      win32_window_dimension dim = getWindowDimension(Window);
       CopyBufferToWindow(
         deviceContext, 
         dim.width, dim.height,
-        &globalbackbuffer,
+        &globalGraphicsBuffer,
         paint.rcPaint.left, 
         paint.rcPaint.top, 
         paint.rcPaint.right - paint.rcPaint.left,
@@ -250,7 +253,7 @@ int APIENTRY WinMain(
 
     WNDCLASSEX WindowClass = {};
 
-    ResizeDIBSection(&globalbackbuffer, 1280, 720);
+    ResizeDIBSection(&globalGraphicsBuffer, 1280, 720);
 
     WindowClass.cbSize = sizeof(WNDCLASSEX);
     WindowClass.style = CS_VREDRAW|CS_HREDRAW;
@@ -338,14 +341,20 @@ int APIENTRY WinMain(
             }
           }
 
-          RenderGradient(&globalbackbuffer, xoffset, yoffset);
+          graphics_buffer graphicsBuffer = {};
+          buffer.memory = globalGraphicsBuffer.memory;
+          buffer.width = globalGraphicsBuffer.width;
+          buffer.height = globalGraphicsBuffer.height;
+          buffer.pitch = globalGraphicsBuffer.pitch;
+
+          GameUpdateAndRender(&buffer);
 
           HDC deviceContext = GetDC(WindowHandle);
-          window_dimension dim = getWindowDimension(WindowHandle);
+          win32_window_dimension dim = getWindowDimension(WindowHandle);
           CopyBufferToWindow(
             deviceContext, 
             dim.width, dim.height,
-            &globalbackbuffer,
+            &globalGraphicsBuffer,
             0, 
             0, 
             dim.width,
