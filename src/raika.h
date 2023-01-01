@@ -3,6 +3,10 @@
 // File IO
 
 // This includes everything that the game will provide to the platform.
+struct sound_buffer {
+    void *memory;
+};
+
 struct graphics_buffer {
   void *memory;
   int width;

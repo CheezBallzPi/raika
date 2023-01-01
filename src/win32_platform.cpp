@@ -2,10 +2,10 @@
 
 #include <windows.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <xinput.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
-
 
 struct win32_graphics_buffer {
   BITMAPINFO info;
@@ -20,10 +20,19 @@ struct win32_window_dimension {
   int height; 
 };
 
+struct win32_audio_client {
+  UINT32 bufferSize;
+  UINT32 sampleBytes;
+  IAudioClient *audioClient;
+  IAudioRenderClient *renderClient;
+  IAudioClock *audioClock;
+  ISimpleAudioVolume *audioVolume;
+};
+
 // globals
 static bool running;
 static win32_graphics_buffer globalGraphicsBuffer;
-static IAudioRenderClient *audioRenderClient;
+static win32_audio_client globalAudioClient; 
 
 // Manually load XInput functions
 #define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pState)
@@ -37,7 +46,10 @@ static x_input_set_state *XInputSetState_;
 #define XInputGetState XInputGetState_
 #define XInputSetState XInputSetState_
 
-static void loadXInput() {
+// COM result check
+#define RETURN_IF_FAILED(com_call) {HRESULT hr; if(FAILED(hr = com_call)) { return hr; }}
+
+static void LoadXInput() {
   HMODULE lib = LoadLibraryA("xinput1_4.dll");
   if(!lib) {
     lib = LoadLibraryA("xinput1_3.dll");
@@ -48,56 +60,114 @@ static void loadXInput() {
   }
 }
 
-static HRESULT initAudio(
+static HRESULT InitAudio(
   REFERENCE_TIME bufferDuration, 
   int32_t samplesPerSec
 ) {
-  HRESULT hr;
-  IMMDeviceEnumerator *deviceEnumerator;
+  IMMDeviceEnumerator *deviceEnumerator = {};
   IMMDevice *mmDevice;
-  IAudioClient *audioClient;
+  globalAudioClient = {};
 
   // Obtain Device Enumerator
-  if(FAILED(hr = CoCreateInstance(
-    CLSID_MMDeviceEnumerator, NULL,
-    CLSCTX_ALL, IID_IMMDeviceEnumerator,
-    (LPVOID *) deviceEnumerator
-  ))) { return hr; };
+  RETURN_IF_FAILED(CoCreateInstance(
+    __uuidof(MMDeviceEnumerator), NULL,
+    CLSCTX_ALL, IID_PPV_ARGS(&deviceEnumerator)
+  ));
   // Obtain Device
   // Just use the default one:
-  if(FAILED(hr = deviceEnumerator->GetDefaultAudioEndpoint(
+  RETURN_IF_FAILED(deviceEnumerator->GetDefaultAudioEndpoint(
     eRender, eConsole, &mmDevice
-  ))) { return hr; };
+  ));
   // Obtain Audio Client
-  if(FAILED(hr = mmDevice->Activate(
-    IID_IAudioClient,
+  RETURN_IF_FAILED(mmDevice->Activate(
+    __uuidof(IAudioClient),
     CLSCTX_ALL,
     NULL,
-    (void **) &audioClient
-  ))) { return hr; };
+    (void **) &(globalAudioClient.audioClient)
+  ));
   // Initialize Audio Client
   // First we need a Wave Format
-  WAVEFORMATEX *waveFormat;
-  waveFormat->wFormatTag = WAVE_FORMAT_PCM;
-  waveFormat->nChannels = 2;
-  waveFormat->nSamplesPerSec = samplesPerSec;
-  waveFormat->wBitsPerSample = 16;
-  waveFormat->nBlockAlign = (waveFormat->nChannels * waveFormat->wBitsPerSample) / 8;
-  waveFormat->nAvgBytesPerSec = waveFormat->nSamplesPerSec * waveFormat->nBlockAlign;
-  waveFormat->cbSize = 0;
+  WAVEFORMATEX waveFormat = {};
+  waveFormat.wFormatTag = WAVE_FORMAT_PCM;
+  waveFormat.nChannels = 2;
+  waveFormat.nSamplesPerSec = samplesPerSec;
+  waveFormat.wBitsPerSample = 16;
+  waveFormat.nBlockAlign = (waveFormat.nChannels * waveFormat.wBitsPerSample) / 8;
+  waveFormat.nAvgBytesPerSec = waveFormat.nSamplesPerSec * waveFormat.nBlockAlign;
+  waveFormat.cbSize = 0;
   // Throw that into the client
-  if(FAILED(hr = audioClient->Initialize(
+  RETURN_IF_FAILED(globalAudioClient.audioClient->Initialize(
     AUDCLNT_SHAREMODE_SHARED,
     0, bufferDuration, 0,
-    waveFormat, NULL
-  ))) { return hr; }
+    &waveFormat, NULL
+  ));
   // Obtain Render Client
-  if(FAILED(hr = audioClient->GetService(
-    IID_IAudioRenderClient, (void **) &audioRenderClient
-  ))) { return hr; };
+  RETURN_IF_FAILED(globalAudioClient.audioClient->GetService(
+    __uuidof(IAudioRenderClient), (void **) &globalAudioClient.renderClient
+  ));
+  // Obtain Audio Clock
+  RETURN_IF_FAILED(globalAudioClient.audioClient->GetService(
+    __uuidof(IAudioClock), (void **) &globalAudioClient.audioClock
+  ));
+  // Write true buffer size
+  RETURN_IF_FAILED(globalAudioClient.audioClient->GetBufferSize(
+    &globalAudioClient.bufferSize
+  ));
+  // Write silence data to buffer
+  BYTE *data;
+  RETURN_IF_FAILED(globalAudioClient.renderClient->GetBuffer(
+    globalAudioClient.bufferSize, &data
+  ));
+  // We don't actually have to write anything, just use the flag
+  RETURN_IF_FAILED(globalAudioClient.renderClient->ReleaseBuffer(
+    globalAudioClient.bufferSize, AUDCLNT_BUFFERFLAGS_SILENT
+  ));
+  // Update Bytes per Sample (reuse waveformat)
+  globalAudioClient.sampleBytes = (waveFormat.nChannels * waveFormat.wBitsPerSample) / 8;
+  // Start the stream!
+  RETURN_IF_FAILED(globalAudioClient.audioClient->Start());
+  // Print volume
+  RETURN_IF_FAILED(globalAudioClient.audioClient->GetService(
+    __uuidof(ISimpleAudioVolume), (void **) &globalAudioClient.audioVolume
+  ));
+
+  return EXIT_SUCCESS;
 }
 
-static win32_window_dimension getWindowDimension(
+static int squareWaveCounter = 0;
+static int squareWaveHz = 256;
+
+static void LoadAudioData(int32_t framesRequested, BYTE *buffer) {
+  int16_t * bufferPointer = (int16_t *) buffer;
+  int squareWavePeriod = 48000 / squareWaveHz;
+  for(int i = 0; i < framesRequested; ++i) {
+    if(squareWaveCounter < 0) {
+      squareWaveCounter = squareWavePeriod;
+    }
+    *bufferPointer++ = (squareWaveCounter > (squareWavePeriod/2)) ? 3000: -3000;
+    *bufferPointer++ = (squareWaveCounter > (squareWavePeriod/2)) ? 3000: -3000;
+    squareWaveCounter--;
+  }
+}
+
+static HRESULT WriteToAudioBuffer() {
+  UINT32 currentlyWrittenFrames;
+  BYTE *buffer;
+  RETURN_IF_FAILED(
+    globalAudioClient.audioClient->GetCurrentPadding(&currentlyWrittenFrames)
+  );
+  int32_t framesToRequest = globalAudioClient.bufferSize - currentlyWrittenFrames;
+  RETURN_IF_FAILED(
+    globalAudioClient.renderClient->GetBuffer(framesToRequest, &buffer)
+  );
+
+  LoadAudioData(framesToRequest, buffer);
+
+  globalAudioClient.renderClient->ReleaseBuffer(framesToRequest, 0);
+  return EXIT_SUCCESS;
+}
+
+static win32_window_dimension GetWindowDimension(
   HWND Window
 ) {
   win32_window_dimension out;
@@ -221,7 +291,7 @@ LRESULT MainWindowCallback(
     {
       PAINTSTRUCT paint;
       HDC deviceContext = BeginPaint(Window, &paint);
-      win32_window_dimension dim = getWindowDimension(Window);
+      win32_window_dimension dim = GetWindowDimension(Window);
       CopyBufferToWindow(
         deviceContext, 
         dim.width, dim.height,
@@ -249,7 +319,7 @@ int APIENTRY WinMain(
   int       nShowCmd
 ) {
     // dynamically load some stuff
-    loadXInput();
+    LoadXInput();
 
     WNDCLASSEX WindowClass = {};
 
@@ -278,6 +348,9 @@ int APIENTRY WinMain(
       );
       if(WindowHandle) {
         running = true;
+
+        // Load audio
+        RETURN_IF_FAILED(InitAudio(10000000, 48000)); // 1 second buffer
 
         int xoffset = 0;
         int yoffset = 0;
@@ -342,15 +415,16 @@ int APIENTRY WinMain(
           }
 
           graphics_buffer graphicsBuffer = {};
-          buffer.memory = globalGraphicsBuffer.memory;
-          buffer.width = globalGraphicsBuffer.width;
-          buffer.height = globalGraphicsBuffer.height;
-          buffer.pitch = globalGraphicsBuffer.pitch;
+          graphicsBuffer.memory = globalGraphicsBuffer.memory;
+          graphicsBuffer.width = globalGraphicsBuffer.width;
+          graphicsBuffer.height = globalGraphicsBuffer.height;
+          graphicsBuffer.pitch = globalGraphicsBuffer.pitch;
 
-          GameUpdateAndRender(&buffer);
+          GameUpdateAndRender(&graphicsBuffer);
+          WriteToAudioBuffer();
 
           HDC deviceContext = GetDC(WindowHandle);
-          win32_window_dimension dim = getWindowDimension(WindowHandle);
+          win32_window_dimension dim = GetWindowDimension(WindowHandle);
           CopyBufferToWindow(
             deviceContext, 
             dim.width, dim.height,

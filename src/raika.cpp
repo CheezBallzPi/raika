@@ -1,5 +1,7 @@
 #include "raika.h"
 
+#include <stdint.h>
+
 static void GameOutputSound(
     sound_buffer *buffer, 
     int sampleCount
@@ -10,7 +12,7 @@ static void GameOutputSound(
 }
 
 static void RenderGradient(
-    offscreen_buffer *buffer, 
+    graphics_buffer *buffer, 
     int xoffset, 
     int yoffset
 ) {
@@ -29,10 +31,10 @@ static void RenderGradient(
 }
 
 static void GameUpdateAndRender(
-    offscreen_buffer *buffer
+    graphics_buffer *buffer
 ) {
     int xoffset = 0;
     int yoffset = 0;
-    GameOutputSound(&soundBuffer, sampleCount);
+    //GameOutputSound(&soundBuffer, sampleCount);
     RenderGradient(buffer, xoffset, yoffset);
 }
