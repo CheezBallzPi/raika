@@ -5,6 +5,7 @@
 #include <xinput.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#include <comdef.h>
 
 #define SAMPLES_PER_SECOND 48000
 #define FPS 30
@@ -25,6 +26,8 @@ struct win32_window_dimension {
 struct win32_audio_client {
   UINT32 bufferSize;
   UINT32 sampleBytes;
+  int bitDepth; 
+  int channels;
   IAudioClient *audioClient;
   IAudioRenderClient *renderClient;
   IAudioClock *audioClock;
@@ -49,7 +52,7 @@ static x_input_set_state *XInputSetState_;
 #define XInputSetState XInputSetState_
 
 // COM result check
-#define RETURN_IF_FAILED(com_call) {HRESULT hr; if(FAILED(hr = com_call)) { return hr; }}
+#define RETURN_IF_FAILED(com_call) {HRESULT hr; if(FAILED(hr = com_call)) { _com_error err(hr); OutputDebugString(err.ErrorMessage()); return hr; }}
 
 static void LoadXInput() {
   HMODULE lib = LoadLibraryA("xinput1_4.dll");
@@ -89,19 +92,29 @@ static HRESULT InitAudio(
   ));
   // Initialize Audio Client
   // First we need a Wave Format
-  WAVEFORMATEX waveFormat = {};
-  waveFormat.wFormatTag = WAVE_FORMAT_PCM;
-  waveFormat.nChannels = 2;
-  waveFormat.nSamplesPerSec = samplesPerSec;
-  waveFormat.wBitsPerSample = 16;
-  waveFormat.nBlockAlign = (waveFormat.nChannels * waveFormat.wBitsPerSample) / 8;
-  waveFormat.nAvgBytesPerSec = waveFormat.nSamplesPerSec * waveFormat.nBlockAlign;
-  waveFormat.cbSize = 0;
+  WAVEFORMATEX waveFormatPrimary = {};
+  waveFormatPrimary.wFormatTag = WAVE_FORMAT_PCM;
+  waveFormatPrimary.nChannels = 2;
+  waveFormatPrimary.nSamplesPerSec = samplesPerSec;
+  waveFormatPrimary.wBitsPerSample = 16;
+  waveFormatPrimary.nBlockAlign = (waveFormatPrimary.nChannels * waveFormatPrimary.wBitsPerSample) / 8;
+  waveFormatPrimary.nAvgBytesPerSec = waveFormatPrimary.nSamplesPerSec * waveFormatPrimary.nBlockAlign;
+  waveFormatPrimary.cbSize = 0;
+  // See if this format is valid
+  WAVEFORMATEX *waveFormatClosest = NULL;
+  // RETURN_IF_FAILED(globalAudioClient.audioClient->IsFormatSupported(
+  //   AUDCLNT_SHAREMODE_SHARED,
+  //   &waveFormatPrimary,
+  //   &waveFormatClosest
+  // ));
+  if(waveFormatClosest == NULL) {
+    waveFormatClosest = &waveFormatPrimary;
+  }
   // Throw that into the client
   RETURN_IF_FAILED(globalAudioClient.audioClient->Initialize(
     AUDCLNT_SHAREMODE_SHARED,
-    0, bufferDuration, 0,
-    &waveFormat, NULL
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, bufferDuration, 0,
+    waveFormatClosest, NULL
   ));
   // Obtain Render Client
   RETURN_IF_FAILED(globalAudioClient.audioClient->GetService(
@@ -125,7 +138,9 @@ static HRESULT InitAudio(
     globalAudioClient.bufferSize, AUDCLNT_BUFFERFLAGS_SILENT
   ));
   // Update Bytes per Sample (reuse waveformat)
-  globalAudioClient.sampleBytes = (waveFormat.nChannels * waveFormat.wBitsPerSample) / 8;
+  globalAudioClient.sampleBytes = (waveFormatClosest->nChannels * waveFormatClosest->wBitsPerSample) / 8;
+  globalAudioClient.bitDepth = waveFormatClosest->wBitsPerSample;
+  globalAudioClient.channels = waveFormatClosest->nChannels;
   // Start the stream!
   RETURN_IF_FAILED(globalAudioClient.audioClient->Start());
   // Print volume
@@ -143,6 +158,8 @@ static HRESULT MakeAudioBuffer(sound_buffer *buffer) {
   );
   buffer->samplesRequested = globalAudioClient.bufferSize - currentlyWrittenFrames;
   buffer->samplesPerSecond = SAMPLES_PER_SECOND;
+  buffer->bytesPerSample = globalAudioClient.bitDepth / 8;
+  buffer->channels = globalAudioClient.channels;
   // buffer->samplesRequested = buffer->samplesPerSecond / FPS;
   RETURN_IF_FAILED(
     globalAudioClient.renderClient->GetBuffer(buffer->samplesRequested, (BYTE **) &(buffer->memory))
@@ -332,11 +349,12 @@ int APIENTRY WinMain(
         hInstance,
         0
       );
+
+      // Load audio
+      RETURN_IF_FAILED(InitAudio(1000000, SAMPLES_PER_SECOND)); // 1s buffer
+
       if(WindowHandle) {
         running = true;
-
-        // Load audio
-        RETURN_IF_FAILED(InitAudio(1000000, SAMPLES_PER_SECOND)); // 1s buffer
 
         LARGE_INTEGER beginCounter, endCounter;
         uint64_t beginTimestamp, endTimestamp;

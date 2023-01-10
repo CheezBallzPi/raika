@@ -7,6 +7,8 @@ struct sound_buffer {
     void *memory;
     int samplesPerSecond;
     int samplesRequested;
+    int bytesPerSample;
+    int channels;
 };
 
 struct graphics_buffer {

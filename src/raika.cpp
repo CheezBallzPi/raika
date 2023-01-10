@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <cstring>
 
 #define Pi32 3.1415926535897f
 
@@ -9,15 +10,20 @@ static void GameOutputSound(sound_buffer *buffer) {
   static int currentAudioPos = 0;
 
   int waveHz = 256;
-  int waveAmplitude = 2000;
+  int64_t waveAmplitude = (((int64_t) 1) << ((buffer->bytesPerSample) * 8) - 1) / 5; // 20% volume
 
-  int16_t * bufferPointer = (int16_t *) (buffer->memory);
-  float sinValue;
+  char * bufferPointer = (char *) (buffer->memory);
+  double sinValue;
+  int64_t writeValue;
+
   int wavePeriod = buffer->samplesPerSecond / waveHz;
   for(int i = 0; i < buffer->samplesRequested; ++i) {
     sinValue = sinf(((float) currentAudioPos / (float) wavePeriod) * 2 * Pi32);
-    *bufferPointer++ = waveAmplitude * sinValue;
-    *bufferPointer++ = waveAmplitude * sinValue;
+    writeValue = waveAmplitude * sinValue;
+    for(int j = 0; j < buffer->channels; j++) {
+      memcpy(bufferPointer, &writeValue, buffer->bytesPerSample);
+      bufferPointer += buffer->bytesPerSample;
+    }
 
     currentAudioPos++;
     if(currentAudioPos == wavePeriod) {
