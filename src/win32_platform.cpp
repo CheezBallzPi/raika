@@ -2,10 +2,12 @@
 
 #include <windows.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <xinput.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+
+#define SAMPLES_PER_SECOND 48000
+#define FPS 30
 
 struct win32_graphics_buffer {
   BITMAPINFO info;
@@ -134,36 +136,17 @@ static HRESULT InitAudio(
   return EXIT_SUCCESS;
 }
 
-static int squareWaveCounter = 0;
-static int squareWaveHz = 256;
-
-static void LoadAudioData(int32_t framesRequested, BYTE *buffer) {
-  int16_t * bufferPointer = (int16_t *) buffer;
-  int squareWavePeriod = 48000 / squareWaveHz;
-  for(int i = 0; i < framesRequested; ++i) {
-    if(squareWaveCounter < 0) {
-      squareWaveCounter = squareWavePeriod;
-    }
-    *bufferPointer++ = (squareWaveCounter > (squareWavePeriod/2)) ? 3000: -3000;
-    *bufferPointer++ = (squareWaveCounter > (squareWavePeriod/2)) ? 3000: -3000;
-    squareWaveCounter--;
-  }
-}
-
-static HRESULT WriteToAudioBuffer() {
+static HRESULT MakeAudioBuffer(sound_buffer *buffer) {
   UINT32 currentlyWrittenFrames;
-  BYTE *buffer;
   RETURN_IF_FAILED(
     globalAudioClient.audioClient->GetCurrentPadding(&currentlyWrittenFrames)
   );
-  int32_t framesToRequest = globalAudioClient.bufferSize - currentlyWrittenFrames;
+  buffer->samplesRequested = globalAudioClient.bufferSize - currentlyWrittenFrames;
+  buffer->samplesPerSecond = SAMPLES_PER_SECOND;
+  // buffer->samplesRequested = buffer->samplesPerSecond / FPS;
   RETURN_IF_FAILED(
-    globalAudioClient.renderClient->GetBuffer(framesToRequest, &buffer)
+    globalAudioClient.renderClient->GetBuffer(buffer->samplesRequested, (BYTE **) &(buffer->memory))
   );
-
-  LoadAudioData(framesToRequest, buffer);
-
-  globalAudioClient.renderClient->ReleaseBuffer(framesToRequest, 0);
   return EXIT_SUCCESS;
 }
 
@@ -331,6 +314,9 @@ int APIENTRY WinMain(
     WindowClass.hInstance = hInstance;
     WindowClass.lpszClassName = "RaikaWindow";
 
+    LARGE_INTEGER perfFrequency;
+    QueryPerformanceFrequency(&perfFrequency);
+
     if(RegisterClassEx(&WindowClass)) {
       HWND WindowHandle = CreateWindowEx(
         0,
@@ -350,13 +336,16 @@ int APIENTRY WinMain(
         running = true;
 
         // Load audio
-        RETURN_IF_FAILED(InitAudio(10000000, 48000)); // 1 second buffer
+        RETURN_IF_FAILED(InitAudio(1000000, SAMPLES_PER_SECOND)); // 1s buffer
 
-        int xoffset = 0;
-        int yoffset = 0;
+        LARGE_INTEGER beginCounter, endCounter;
+        uint64_t beginTimestamp, endTimestamp;
+        QueryPerformanceCounter(&beginCounter);
+        beginTimestamp = __rdtsc();
 
         while(running) { // Running loop
           // Deal with messages
+
           MSG message;
           
           while(PeekMessage(&message, 0, 0, 0, PM_REMOVE)) {
@@ -397,18 +386,6 @@ int APIENTRY WinMain(
               int16_t rStickX = pad->sThumbRX;
               int16_t rStickY = pad->sThumbRY;
 
-              if(aButton) {
-                yoffset += 1;
-              }
-              if(bButton) {
-                yoffset -= 1;
-              }
-              if(xButton) {
-                XINPUT_VIBRATION vibrationData;
-                vibrationData.wLeftMotorSpeed = 20000;
-                vibrationData.wRightMotorSpeed = 20000;
-                XInputSetState(i, &vibrationData);
-              }
             } else {
               // not available
             }
@@ -419,9 +396,12 @@ int APIENTRY WinMain(
           graphicsBuffer.width = globalGraphicsBuffer.width;
           graphicsBuffer.height = globalGraphicsBuffer.height;
           graphicsBuffer.pitch = globalGraphicsBuffer.pitch;
+          
+          sound_buffer soundBuffer = {};
+          MakeAudioBuffer(&soundBuffer);
 
-          GameUpdateAndRender(&graphicsBuffer);
-          WriteToAudioBuffer();
+          GameUpdateAndRender(&graphicsBuffer, &soundBuffer);
+          globalAudioClient.renderClient->ReleaseBuffer(soundBuffer.samplesRequested, 0);
 
           HDC deviceContext = GetDC(WindowHandle);
           win32_window_dimension dim = GetWindowDimension(WindowHandle);
@@ -436,7 +416,16 @@ int APIENTRY WinMain(
           );
           ReleaseDC(WindowHandle, deviceContext);
 
-          ++xoffset;
+          QueryPerformanceCounter(&endCounter);
+          uint64_t counterElapsed = endCounter.QuadPart - beginCounter.QuadPart;
+          uint32_t timeElapsed = (counterElapsed * 1000) / perfFrequency.QuadPart; // in ms
+          endTimestamp = __rdtsc();
+          uint64_t timestampElapsed = endTimestamp - beginTimestamp;
+          char Buffer[256];
+          wsprintf(Buffer, "ms/frame: %dms, %d\n", timeElapsed, timestampElapsed);
+          OutputDebugString(Buffer);
+          beginCounter = endCounter;
+          beginTimestamp = endTimestamp;
         }
       } else {
         // Handle failed

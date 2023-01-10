@@ -5,6 +5,8 @@
 // This includes everything that the game will provide to the platform.
 struct sound_buffer {
     void *memory;
+    int samplesPerSecond;
+    int samplesRequested;
 };
 
 struct graphics_buffer {
@@ -14,7 +16,7 @@ struct graphics_buffer {
   int pitch;
 };
 
-static void GameUpdateAndRender(graphics_buffer *buffer);
+static void GameUpdateAndRender(graphics_buffer *graphicsBuffer, sound_buffer *soundBuffer);
 
 #define RAIKA_H
 #endif

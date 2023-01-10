@@ -1,14 +1,29 @@
 #include "raika.h"
 
 #include <stdint.h>
+#include <math.h>
 
-static void GameOutputSound(
-    sound_buffer *buffer, 
-    int sampleCount
-) {
-    for(int i = 0; i < sampleCount; ++sampleCount) {
-        
+#define Pi32 3.1415926535897f
+
+static void GameOutputSound(sound_buffer *buffer) {
+  static int currentAudioPos = 0;
+
+  int waveHz = 256;
+  int waveAmplitude = 2000;
+
+  int16_t * bufferPointer = (int16_t *) (buffer->memory);
+  float sinValue;
+  int wavePeriod = buffer->samplesPerSecond / waveHz;
+  for(int i = 0; i < buffer->samplesRequested; ++i) {
+    sinValue = sinf(((float) currentAudioPos / (float) wavePeriod) * 2 * Pi32);
+    *bufferPointer++ = waveAmplitude * sinValue;
+    *bufferPointer++ = waveAmplitude * sinValue;
+
+    currentAudioPos++;
+    if(currentAudioPos == wavePeriod) {
+      currentAudioPos = 0;
     }
+  }
 }
 
 static void RenderGradient(
@@ -31,10 +46,12 @@ static void RenderGradient(
 }
 
 static void GameUpdateAndRender(
-    graphics_buffer *buffer
+    graphics_buffer *graphicsBuffer,
+    sound_buffer *soundBuffer
 ) {
     int xoffset = 0;
     int yoffset = 0;
-    //GameOutputSound(&soundBuffer, sampleCount);
-    RenderGradient(buffer, xoffset, yoffset);
+
+    GameOutputSound(soundBuffer);
+    RenderGradient(graphicsBuffer, xoffset, yoffset);
 }
