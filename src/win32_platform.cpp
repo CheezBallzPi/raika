@@ -9,7 +9,7 @@
 
 #define SAMPLES_PER_SECOND 48000
 #define FPS 30
-#define CONTROLLER_MAX 4
+#define TRIGGER_DEADZONE 100
 
 // COM result check
 #define RETURN_IF_FAILED(com_call) {HRESULT hr; if(FAILED(hr = (com_call))) { _com_error err(hr); OutputDebugString(err.ErrorMessage()); return hr; }}
@@ -405,8 +405,8 @@ int APIENTRY WinMain(
               gameInput.controllers[i].buttons[8] = (pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER);
               gameInput.controllers[i].buttons[9] = (pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
 
-              gameInput.controllers[i].buttons[10] = pad->bLeftTrigger != 0;
-              gameInput.controllers[i].buttons[11] = pad->bRightTrigger != 0;
+              gameInput.controllers[i].buttons[10] = pad->bLeftTrigger > TRIGGER_DEADZONE;
+              gameInput.controllers[i].buttons[11] = pad->bRightTrigger > TRIGGER_DEADZONE;
 
               gameInput.controllers[i].lStickX = pad->sThumbLX < 0 ? (float) pad->sThumbLX / 32768.0f : (float) pad->sThumbLX / 32767.0f;
               gameInput.controllers[i].lStickY = pad->sThumbLY < 0 ? (float) pad->sThumbLY / 32768.0f : (float) pad->sThumbLY / 32767.0f;

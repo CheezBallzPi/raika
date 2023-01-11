@@ -56,7 +56,7 @@ static void GameUpdateAndRender(
     game_input *gameInput
 ) {
     player_controller playerInput = gameInput->controllers[0];
-    int waveHz = 256 + (playerInput.lStickX * 200);
+    int waveHz = 256 + (playerInput.buttons[10] ? 200 : 0);
     int xoffset = playerInput.rStickX * 200;
     int yoffset = playerInput.rStickY * 200;
 
