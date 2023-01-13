@@ -6,10 +6,9 @@
 
 #define Pi32 3.1415926535897f
 
-static void GameOutputSound(sound_buffer *buffer) {
+static void GameOutputSound(sound_buffer *buffer, int waveHz) {
   static int currentAudioPos = 0;
 
-  int waveHz = 256;
   int64_t waveAmplitude = (((int64_t) 1) << ((buffer->bytesPerSample) * 8) - 1) / 5; // 20% volume
 
   char * bufferPointer = (char *) (buffer->memory);
@@ -41,9 +40,9 @@ static void RenderGradient(
   for(int y = 0; y < buffer->height; ++y) {
       uint32_t *pixel = (uint32_t *) row;
       for(int x = 0; x < buffer->width; ++x) {
-        uint8_t blue = (x + xoffset);
-        uint8_t green = (y + yoffset);
-        uint8_t red = (xoffset + yoffset);
+        uint8_t blue = x + xoffset;
+        uint8_t green = y + yoffset;
+        uint8_t red = 0;
 
         *pixel++ = (red << 16) | (green << 8) | (blue);
       }
@@ -53,11 +52,14 @@ static void RenderGradient(
 
 static void GameUpdateAndRender(
     graphics_buffer *graphicsBuffer,
-    sound_buffer *soundBuffer
+    sound_buffer *soundBuffer,
+    game_input *gameInput
 ) {
-    int xoffset = 0;
-    int yoffset = 0;
+    player_controller playerInput = gameInput->controllers[0];
+    int waveHz = 256 + (playerInput.buttons[10] ? 200 : 0);
+    int xoffset = playerInput.rStickX * 200;
+    int yoffset = playerInput.rStickY * 200;
 
-    GameOutputSound(soundBuffer);
+    GameOutputSound(soundBuffer, waveHz);
     RenderGradient(graphicsBuffer, xoffset, yoffset);
 }

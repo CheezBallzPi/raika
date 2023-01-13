@@ -9,6 +9,11 @@
 
 #define SAMPLES_PER_SECOND 48000
 #define FPS 30
+#define TRIGGER_DEADZONE 100
+
+// COM result check
+#define RETURN_IF_FAILED(com_call) {HRESULT hr; if(FAILED(hr = (com_call))) { _com_error err(hr); OutputDebugString(err.ErrorMessage()); return hr; }}
+
 
 struct win32_graphics_buffer {
   BITMAPINFO info;
@@ -50,9 +55,6 @@ static x_input_get_state *XInputGetState_;
 static x_input_set_state *XInputSetState_;
 #define XInputGetState XInputGetState_
 #define XInputSetState XInputSetState_
-
-// COM result check
-#define RETURN_IF_FAILED(com_call) {HRESULT hr; if(FAILED(hr = com_call)) { _com_error err(hr); OutputDebugString(err.ErrorMessage()); return hr; }}
 
 static void LoadXInput() {
   HMODULE lib = LoadLibraryA("xinput1_4.dll");
@@ -367,33 +369,40 @@ int APIENTRY WinMain(
           }
 
           // Input
-          for(DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
+          game_input gameInput = {};
+
+          int maxControllers = XUSER_MAX_COUNT;
+          if(maxControllers > ArrayCount(gameInput.controllers)) {
+            maxControllers = ArrayCount(gameInput.controllers);
+          }
+
+          for(DWORD i = 0; i < maxControllers; ++i) {
             XINPUT_STATE state;
             if(XInputGetState(i, &state) == ERROR_SUCCESS) {
               // available
-              XINPUT_GAMEPAD *pad = &state.Gamepad;
-              bool dpadUp = (pad->wButtons & XINPUT_GAMEPAD_DPAD_UP);
-              bool dpadDown = (pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
-              bool dpadLeft = (pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
-              bool dpadRight = (pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT);
-              bool startButton = (pad->wButtons & XINPUT_GAMEPAD_START);
-              bool backButton = (pad->wButtons & XINPUT_GAMEPAD_BACK);
-              bool leftThumb = (pad->wButtons & XINPUT_GAMEPAD_LEFT_THUMB);
-              bool rightThumb = (pad->wButtons & XINPUT_GAMEPAD_RIGHT_THUMB);
-              bool leftShoulder = (pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER);
-              bool rightShoulder = (pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
-              bool aButton = (pad->wButtons & XINPUT_GAMEPAD_A);
-              bool bButton = (pad->wButtons & XINPUT_GAMEPAD_B);
-              bool xButton = (pad->wButtons & XINPUT_GAMEPAD_X);
-              bool yButton = (pad->wButtons & XINPUT_GAMEPAD_Y);
+              XINPUT_GAMEPAD *pad = &state.Gamepad;\
+              gameInput.controllers[i].buttons[0] = (pad->wButtons & XINPUT_GAMEPAD_A);
+              gameInput.controllers[i].buttons[1] = (pad->wButtons & XINPUT_GAMEPAD_B);
+              gameInput.controllers[i].buttons[2] = (pad->wButtons & XINPUT_GAMEPAD_X);
+              gameInput.controllers[i].buttons[3] = (pad->wButtons & XINPUT_GAMEPAD_Y);
+              gameInput.controllers[i].dpad[0] = (pad->wButtons & XINPUT_GAMEPAD_DPAD_UP);
+              gameInput.controllers[i].dpad[1] = (pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
+              gameInput.controllers[i].dpad[2] = (pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
+              gameInput.controllers[i].dpad[3] = (pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT);
+              gameInput.controllers[i].buttons[4] = (pad->wButtons & XINPUT_GAMEPAD_START);
+              gameInput.controllers[i].buttons[5] = (pad->wButtons & XINPUT_GAMEPAD_BACK);
+              gameInput.controllers[i].buttons[6] = (pad->wButtons & XINPUT_GAMEPAD_LEFT_THUMB);
+              gameInput.controllers[i].buttons[7] = (pad->wButtons & XINPUT_GAMEPAD_RIGHT_THUMB);
+              gameInput.controllers[i].buttons[8] = (pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER);
+              gameInput.controllers[i].buttons[9] = (pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
 
-              uint8_t lTrigger = pad->bLeftTrigger;
-              uint8_t rTrigger = pad->bRightTrigger;
+              gameInput.controllers[i].buttons[10] = pad->bLeftTrigger > TRIGGER_DEADZONE;
+              gameInput.controllers[i].buttons[11] = pad->bRightTrigger > TRIGGER_DEADZONE;
 
-              int16_t lStickX = pad->sThumbLX;
-              int16_t lStickY = pad->sThumbLY;
-              int16_t rStickX = pad->sThumbRX;
-              int16_t rStickY = pad->sThumbRY;
+              gameInput.controllers[i].lStickX = pad->sThumbLX < 0 ? (float) pad->sThumbLX / 32768.0f : (float) pad->sThumbLX / 32767.0f;
+              gameInput.controllers[i].lStickY = pad->sThumbLY < 0 ? (float) pad->sThumbLY / 32768.0f : (float) pad->sThumbLY / 32767.0f;
+              gameInput.controllers[i].rStickX = pad->sThumbRX < 0 ? (float) pad->sThumbRX / 32768.0f : (float) pad->sThumbRX / 32767.0f;
+              gameInput.controllers[i].rStickY = pad->sThumbRY < 0 ? (float) pad->sThumbRY / 32768.0f : (float) pad->sThumbRY / 32767.0f;
 
             } else {
               // not available
@@ -409,7 +418,7 @@ int APIENTRY WinMain(
           sound_buffer soundBuffer = {};
           MakeAudioBuffer(&soundBuffer);
 
-          GameUpdateAndRender(&graphicsBuffer, &soundBuffer);
+          GameUpdateAndRender(&graphicsBuffer, &soundBuffer, &gameInput);
           globalAudioClient.renderClient->ReleaseBuffer(soundBuffer.samplesRequested, 0);
 
           HDC deviceContext = GetDC(WindowHandle);
