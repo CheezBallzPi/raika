@@ -92,29 +92,20 @@ static HRESULT InitAudio(
   ));
   // Initialize Audio Client
   // First we need a Wave Format
-  WAVEFORMATEX waveFormatPrimary = {};
-  waveFormatPrimary.wFormatTag = WAVE_FORMAT_PCM;
-  waveFormatPrimary.nChannels = 2;
-  waveFormatPrimary.nSamplesPerSec = samplesPerSec;
-  waveFormatPrimary.wBitsPerSample = 16;
-  waveFormatPrimary.nBlockAlign = (waveFormatPrimary.nChannels * waveFormatPrimary.wBitsPerSample) / 8;
-  waveFormatPrimary.nAvgBytesPerSec = waveFormatPrimary.nSamplesPerSec * waveFormatPrimary.nBlockAlign;
-  waveFormatPrimary.cbSize = 0;
-  // See if this format is valid
-  WAVEFORMATEX *waveFormatClosest = NULL;
-  // RETURN_IF_FAILED(globalAudioClient.audioClient->IsFormatSupported(
-  //   AUDCLNT_SHAREMODE_SHARED,
-  //   &waveFormatPrimary,
-  //   &waveFormatClosest
-  // ));
-  if(waveFormatClosest == NULL) {
-    waveFormatClosest = &waveFormatPrimary;
-  }
+  WAVEFORMATEX waveFormat = {};
+  waveFormat.wFormatTag = WAVE_FORMAT_PCM;
+  waveFormat.nChannels = 2;
+  waveFormat.nSamplesPerSec = samplesPerSec;
+  waveFormat.wBitsPerSample = 16;
+  waveFormat.nBlockAlign = (waveFormat.nChannels * waveFormat.wBitsPerSample) / 8;
+  waveFormat.nAvgBytesPerSec = waveFormat.nSamplesPerSec * waveFormat.nBlockAlign;
+  waveFormat.cbSize = 0;
   // Throw that into the client
   RETURN_IF_FAILED(globalAudioClient.audioClient->Initialize(
     AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, bufferDuration, 0,
-    waveFormatClosest, NULL
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, 
+    bufferDuration, 0,
+    &waveFormat, NULL
   ));
   // Obtain Render Client
   RETURN_IF_FAILED(globalAudioClient.audioClient->GetService(
@@ -138,9 +129,9 @@ static HRESULT InitAudio(
     globalAudioClient.bufferSize, AUDCLNT_BUFFERFLAGS_SILENT
   ));
   // Update Bytes per Sample (reuse waveformat)
-  globalAudioClient.sampleBytes = (waveFormatClosest->nChannels * waveFormatClosest->wBitsPerSample) / 8;
-  globalAudioClient.bitDepth = waveFormatClosest->wBitsPerSample;
-  globalAudioClient.channels = waveFormatClosest->nChannels;
+  globalAudioClient.sampleBytes = (waveFormat.nChannels * waveFormat.wBitsPerSample) / 8;
+  globalAudioClient.bitDepth = waveFormat.wBitsPerSample;
+  globalAudioClient.channels = waveFormat.nChannels;
   // Start the stream!
   RETURN_IF_FAILED(globalAudioClient.audioClient->Start());
   // Print volume
