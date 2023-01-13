@@ -1,7 +1,6 @@
 #include "raika.cpp"
 
 #include <windows.h>
-#include <stdint.h>
 #include <xinput.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -303,6 +302,73 @@ LRESULT MainWindowCallback(
   }
 
   return result;
+}
+
+static bool PlatformWriteFile(
+  char * filename, 
+  file_data file
+) {
+  DWORD bytesWritten;
+  bool ret = false;
+
+  HANDLE handle = CreateFileA(
+    filename,
+    GENERIC_WRITE,
+    0,
+    0,
+    CREATE_ALWAYS,
+    FILE_ATTRIBUTE_NORMAL,
+    0
+  );
+  if(handle != INVALID_HANDLE_VALUE) {
+    WriteFile(handle, file.memory, file.size, &bytesWritten, 0);
+    if(bytesWritten == file.size) {
+      ret = true;
+    }
+    CloseHandle(handle);
+  }
+
+  return ret;
+}
+
+static file_data PlatformReadFile(
+  char * filename
+) {
+  file_data file = {};
+  DWORD bytesRead;
+
+  HANDLE handle = CreateFileA(
+    filename,
+    GENERIC_READ,
+    FILE_SHARE_READ,
+    0,
+    OPEN_EXISTING,
+    FILE_ATTRIBUTE_NORMAL,
+    0
+  );
+  if(handle != INVALID_HANDLE_VALUE) {
+    LARGE_INTEGER fileSize;
+    if(GetFileSizeEx(handle, &fileSize)) {
+      file.memory = VirtualAlloc(0, fileSize.QuadPart, MEM_COMMIT, PAGE_READWRITE);
+      Assert(fileSize.QuadPart <= 0xFFFFFFFF);
+      if(ReadFile(handle, file.memory, fileSize.QuadPart, &bytesRead, 0) && (fileSize.QuadPart == bytesRead)) {
+        file.size = bytesRead;
+      } else {
+        PlatformFreeFile(file);
+      }
+    }
+    CloseHandle(handle);
+  }
+
+  return file;
+}
+
+static void PlatformFreeFile(
+  file_data file
+) {
+  if(file.memory) {
+    VirtualFree(file.memory, 0, MEM_RELEASE);
+  }
 }
 
 int APIENTRY WinMain(

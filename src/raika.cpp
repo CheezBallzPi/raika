@@ -1,6 +1,5 @@
 #include "raika.h"
 
-#include <stdint.h>
 #include <math.h>
 #include <cstring>
 
@@ -55,6 +54,9 @@ static void GameUpdateAndRender(
     sound_buffer *soundBuffer,
     game_input *gameInput
 ) {
+    file_data file = PlatformReadFile("C:\\Users\\cheez\\Documents\\gamedev\\raika\\src\\raika.cpp");
+    PlatformWriteFile("C:\\Users\\cheez\\Documents\\gamedev\\raika\\build\\testOut", file);
+    PlatformFreeFile(file);
     player_controller playerInput = gameInput->controllers[0];
     int waveHz = 256 + (playerInput.buttons[10] ? 200 : 0);
     int xoffset = playerInput.rStickX * 200;
