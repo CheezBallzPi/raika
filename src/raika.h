@@ -42,6 +42,7 @@ struct player_controller {
 };
 
 struct game_input {
+  struct player_controller keyboard;
   struct player_controller controllers[4];
 };
 

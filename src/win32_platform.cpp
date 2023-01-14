@@ -246,31 +246,7 @@ LRESULT MainWindowCallback(
     case WM_KEYDOWN:
     case WM_KEYUP:
     {
-      uint32_t keycode = wParam;
-      bool wasDown = ((lParam & (1 << 30)) != 0);
-      bool isDown = ((lParam & (1 << 31)) == 0);
-      // Only check if an interesting change has been made
-      if(wasDown != isDown) {
-        switch(keycode) {
-          case 'W':
-          OutputDebugString("W\n");
-          break;
-          case 'A':
-          OutputDebugString("A\n");
-          break;
-          case 'S':
-          OutputDebugString("S\n");
-          break;
-          case 'D':
-          OutputDebugString("D\n");
-          break;
-        }
-        
-        bool altPressed = ((lParam & (1 << 29)) != 0);
-        if(altPressed && keycode == VK_F4) {
-          running = false;
-        }
-      }
+      Assert(!"Our keyboard code was skipped!!")
     } break;
     case WM_CLOSE:
     {
@@ -302,6 +278,47 @@ LRESULT MainWindowCallback(
   }
 
   return result;
+}
+
+static void HandleKeyboardInput(game_input * gameInput, uint32_t keycode, bool down) {
+  switch(keycode) {
+    case 'W':
+    gameInput->keyboard.dpad[0] = down;
+    break;
+    case 'A':
+    gameInput->keyboard.dpad[2] = down;
+    break;
+    case 'S':
+    gameInput->keyboard.dpad[1] = down;
+    break;
+    case 'D':
+    gameInput->keyboard.dpad[3] = down;
+    break;
+    case 'K':
+    gameInput->keyboard.buttons[0] = down;
+    break;
+    case 'L':
+    gameInput->keyboard.buttons[1] = down;
+    break;
+    case 'I':
+    gameInput->keyboard.buttons[2] = down;
+    break;
+    case 'O':
+    gameInput->keyboard.buttons[3] = down;
+    break;
+    case 'Q':
+    gameInput->keyboard.buttons[8] = down;
+    break;
+    case 'E':
+    gameInput->keyboard.buttons[9] = down;
+    break;
+    case '-':
+    gameInput->keyboard.buttons[4] = down;
+    break;
+    case '=':
+    gameInput->keyboard.buttons[5] = down;
+    break;
+  }
 }
 
 static bool PlatformWriteFile(
@@ -413,12 +430,18 @@ int APIENTRY WinMain(
       RETURN_IF_FAILED(InitAudio(1000000, SAMPLES_PER_SECOND)); // 1s buffer
 
       if(WindowHandle) {
+        // Window successfully retrieved!
         running = true;
 
         LARGE_INTEGER beginCounter, endCounter;
         uint64_t beginTimestamp, endTimestamp;
         QueryPerformanceCounter(&beginCounter);
         beginTimestamp = __rdtsc();
+
+        // We need to fill these out to pass to the game
+        game_input gameInput = {};
+        graphics_buffer graphicsBuffer = {};
+        sound_buffer soundBuffer = {};
 
         while(running) { // Running loop
           // Deal with messages
@@ -428,15 +451,28 @@ int APIENTRY WinMain(
           while(PeekMessage(&message, 0, 0, 0, PM_REMOVE)) {
             if (message.message == WM_QUIT) {
               running = false;
+            } else if (
+              message.message == WM_SYSKEYDOWN ||
+              message.message == WM_KEYDOWN ||
+              message.message == WM_SYSKEYUP || 
+              message.message == WM_KEYUP
+            ) {
+              uint32_t keycode = message.wParam;
+              bool wasDown = ((message.lParam & (1 << 30)) != 0);
+              bool isDown = ((message.lParam & (1 << 31)) == 0);
+              HandleKeyboardInput(&gameInput, keycode, message.message == WM_SYSKEYDOWN || message.message == WM_KEYDOWN);
+              
+              bool altPressed = ((message.lParam & (1 << 29)) != 0);
+              if(altPressed && keycode == VK_F4) {
+                running = false;
+              }
             } else {
               TranslateMessage(&message);
               DispatchMessage(&message);
             }
           }
 
-          // Input
-          game_input gameInput = {};
-
+          // Controller Input
           int maxControllers = XUSER_MAX_COUNT;
           if(maxControllers > ArrayCount(gameInput.controllers)) {
             maxControllers = ArrayCount(gameInput.controllers);
@@ -475,18 +511,20 @@ int APIENTRY WinMain(
             }
           }
 
-          graphics_buffer graphicsBuffer = {};
+          // Fill graphics buffer
           graphicsBuffer.memory = globalGraphicsBuffer.memory;
           graphicsBuffer.width = globalGraphicsBuffer.width;
           graphicsBuffer.height = globalGraphicsBuffer.height;
           graphicsBuffer.pitch = globalGraphicsBuffer.pitch;
           
-          sound_buffer soundBuffer = {};
+          // Create audio buffer
           MakeAudioBuffer(&soundBuffer);
 
+          // Pass into the game!
           GameUpdateAndRender(&graphicsBuffer, &soundBuffer, &gameInput);
           globalAudioClient.renderClient->ReleaseBuffer(soundBuffer.samplesRequested, 0);
 
+          // Draw what we got
           HDC deviceContext = GetDC(WindowHandle);
           win32_window_dimension dim = GetWindowDimension(WindowHandle);
           CopyBufferToWindow(
@@ -500,6 +538,7 @@ int APIENTRY WinMain(
           );
           ReleaseDC(WindowHandle, deviceContext);
 
+          // Timing code
           QueryPerformanceCounter(&endCounter);
           uint64_t counterElapsed = endCounter.QuadPart - beginCounter.QuadPart;
           uint32_t timeElapsed = (counterElapsed * 1000) / perfFrequency.QuadPart; // in ms
