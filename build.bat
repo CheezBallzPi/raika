@@ -6,5 +6,5 @@ if ERRORLEVEL 1 (
 )
 if NOT EXIST build mkdir build
 pushd build
-cl -Zi ..\src\win32_platform.cpp User32.lib Gdi32.lib Ole32.lib
+cl -Zi ..\src\win32_platform.cpp User32.lib Gdi32.lib Ole32.lib Winmm.lib
 popd

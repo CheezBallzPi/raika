@@ -9,6 +9,7 @@
 #define SAMPLES_PER_SECOND 48000
 #define FPS 30
 #define TRIGGER_DEADZONE 100
+#define MONITOR_REFRESH 60
 
 // COM result check
 #define RETURN_IF_FAILED(com_call) {HRESULT hr; if(FAILED(hr = (com_call))) { _com_error err(hr); OutputDebugString(err.ErrorMessage()); return hr; }}
@@ -42,6 +43,7 @@ struct win32_audio_client {
 static bool running;
 static win32_graphics_buffer globalGraphicsBuffer;
 static win32_audio_client globalAudioClient; 
+static int64_t globalPerfFrequency;
 
 // Manually load XInput functions
 #define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pState)
@@ -388,6 +390,17 @@ static void PlatformFreeFile(
   }
 }
 
+inline LARGE_INTEGER GetWallClock() {
+  LARGE_INTEGER result;
+  QueryPerformanceCounter(&result);
+  return result;
+}
+
+inline float GetSecondsElapsed(LARGE_INTEGER start, LARGE_INTEGER end) {
+  float result = ((float) (end.QuadPart - start.QuadPart)) / ((float) globalPerfFrequency);
+  return result;
+}
+
 int APIENTRY WinMain(
   HINSTANCE hInstance,
   HINSTANCE hPrevInstance,
@@ -409,6 +422,11 @@ int APIENTRY WinMain(
 
     LARGE_INTEGER perfFrequency;
     QueryPerformanceFrequency(&perfFrequency);
+    globalPerfFrequency = perfFrequency.QuadPart;
+    bool granularTimer = (timeBeginPeriod(1) == TIMERR_NOERROR); // Set timer granuality to 1ms
+
+    int gameUpdateHz = MONITOR_REFRESH / 2; // CHANGE LATER
+    float targetSecondsPerFrame = 1.0f / (float) gameUpdateHz;
 
     if(RegisterClassEx(&WindowClass)) {
       HWND WindowHandle = CreateWindowEx(
@@ -433,10 +451,8 @@ int APIENTRY WinMain(
         // Window successfully retrieved!
         running = true;
 
-        LARGE_INTEGER beginCounter, endCounter;
+        LARGE_INTEGER beginCounter;
         uint64_t beginTimestamp, endTimestamp;
-        QueryPerformanceCounter(&beginCounter);
-        beginTimestamp = __rdtsc();
 
         // We need to fill these out to pass to the game
         game_input gameInput = {};
@@ -444,6 +460,9 @@ int APIENTRY WinMain(
         sound_buffer soundBuffer = {};
 
         while(running) { // Running loop
+          beginCounter = GetWallClock();
+          beginTimestamp = __rdtsc();
+
           // Deal with messages
 
           MSG message;
@@ -539,16 +558,27 @@ int APIENTRY WinMain(
           ReleaseDC(WindowHandle, deviceContext);
 
           // Timing code
-          QueryPerformanceCounter(&endCounter);
-          uint64_t counterElapsed = endCounter.QuadPart - beginCounter.QuadPart;
-          uint32_t timeElapsed = (counterElapsed * 1000) / perfFrequency.QuadPart; // in ms
+          float elapsedSecondsPerFrame = GetSecondsElapsed(beginCounter, GetWallClock());
+
+          if(elapsedSecondsPerFrame < targetSecondsPerFrame) {
+            if(granularTimer) { // If we can, sleep for part of the remaining time
+              DWORD sleepMS = ((targetSecondsPerFrame - GetSecondsElapsed(beginCounter, GetWallClock())) * 1000) * (0.9);
+              Sleep(sleepMS);
+            }
+            while(elapsedSecondsPerFrame < targetSecondsPerFrame) {
+              elapsedSecondsPerFrame = GetSecondsElapsed(beginCounter, GetWallClock());
+            }
+          } else {
+            OutputDebugString("Missed Frame!\n");
+          }
+
+          // Profiling
           endTimestamp = __rdtsc();
           uint64_t timestampElapsed = endTimestamp - beginTimestamp;
+
           char Buffer[256];
-          wsprintf(Buffer, "ms/frame: %dms, %d\n", timeElapsed, timestampElapsed);
+          sprintf(Buffer, "ms/frame: %.04fs/f, %lld\n", elapsedSecondsPerFrame, timestampElapsed);
           OutputDebugString(Buffer);
-          beginCounter = endCounter;
-          beginTimestamp = endTimestamp;
         }
       } else {
         // Handle failed
@@ -557,5 +587,6 @@ int APIENTRY WinMain(
       // TODO: Window Failed to register
     }
 
+    timeBeginPeriod(1); // End the time granuality
     return 0;
 }

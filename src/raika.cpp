@@ -49,6 +49,9 @@ static void RenderGradient(
   }
 }
 
+static int xoffset = 0;
+static int yoffset = 0;
+
 static void GameUpdateAndRender(
     graphics_buffer *graphicsBuffer,
     sound_buffer *soundBuffer,
@@ -56,8 +59,8 @@ static void GameUpdateAndRender(
 ) {
     player_controller playerInput = gameInput->keyboard;
     int waveHz = 256 + (playerInput.buttons[0] ? 200 : 0);
-    int xoffset = playerInput.dpad[0] ? 200 : -200;
-    int yoffset = playerInput.dpad[1] ? 200 : -200;
+    xoffset += playerInput.dpad[0] ? 10 : 0;
+    yoffset += playerInput.dpad[1] ? 10 : 0;
 
     GameOutputSound(soundBuffer, waveHz);
     RenderGradient(graphicsBuffer, xoffset, yoffset);
