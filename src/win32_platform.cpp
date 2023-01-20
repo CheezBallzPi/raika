@@ -451,7 +451,7 @@ int APIENTRY WinMain(
         // Window successfully retrieved!
         running = true;
 
-        LARGE_INTEGER beginCounter;
+        LARGE_INTEGER beginCounter = GetWallClock();
         uint64_t beginTimestamp, endTimestamp;
 
         // We need to fill these out to pass to the game
@@ -460,7 +460,6 @@ int APIENTRY WinMain(
         sound_buffer soundBuffer = {};
 
         while(running) { // Running loop
-          beginCounter = GetWallClock();
           beginTimestamp = __rdtsc();
 
           // Deal with messages
@@ -543,20 +542,6 @@ int APIENTRY WinMain(
           GameUpdateAndRender(&graphicsBuffer, &soundBuffer, &gameInput);
           globalAudioClient.renderClient->ReleaseBuffer(soundBuffer.samplesRequested, 0);
 
-          // Draw what we got
-          HDC deviceContext = GetDC(WindowHandle);
-          win32_window_dimension dim = GetWindowDimension(WindowHandle);
-          CopyBufferToWindow(
-            deviceContext, 
-            dim.width, dim.height,
-            &globalGraphicsBuffer,
-            0, 
-            0, 
-            dim.width,
-            dim.height
-          );
-          ReleaseDC(WindowHandle, deviceContext);
-
           // Timing code
           float elapsedSecondsPerFrame = GetSecondsElapsed(beginCounter, GetWallClock());
 
@@ -571,6 +556,23 @@ int APIENTRY WinMain(
           } else {
             OutputDebugString("Missed Frame!\n");
           }
+
+          // Reset clock
+          beginCounter = GetWallClock();
+
+          // Draw what we got
+          HDC deviceContext = GetDC(WindowHandle);
+          win32_window_dimension dim = GetWindowDimension(WindowHandle);
+          CopyBufferToWindow(
+            deviceContext, 
+            dim.width, dim.height,
+            &globalGraphicsBuffer,
+            0, 
+            0, 
+            dim.width,
+            dim.height
+          );
+          ReleaseDC(WindowHandle, deviceContext);
 
           // Profiling
           endTimestamp = __rdtsc();
