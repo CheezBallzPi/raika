@@ -63,5 +63,9 @@ static void GameUpdateAndRender(
     yoffset += playerInput.dpad[1] ? 10 : 0;
 
     GameOutputSound(soundBuffer, waveHz);
-    RenderGradient(graphicsBuffer, xoffset, yoffset);
+    if(playerInput.buttons[0]) {
+      RenderGradient(graphicsBuffer, xoffset, yoffset);
+    } else {
+      RenderGradient(graphicsBuffer, yoffset, xoffset);
+    }
 }

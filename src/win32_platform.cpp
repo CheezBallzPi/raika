@@ -425,7 +425,7 @@ int APIENTRY WinMain(
     globalPerfFrequency = perfFrequency.QuadPart;
     bool granularTimer = (timeBeginPeriod(1) == TIMERR_NOERROR); // Set timer granuality to 1ms
 
-    int gameUpdateHz = MONITOR_REFRESH / 2; // CHANGE LATER
+    int gameUpdateHz = MONITOR_REFRESH; // CHANGE LATER
     float targetSecondsPerFrame = 1.0f / (float) gameUpdateHz;
 
     if(RegisterClassEx(&WindowClass)) {
@@ -445,7 +445,7 @@ int APIENTRY WinMain(
       );
 
       // Load audio
-      RETURN_IF_FAILED(InitAudio(1000000, SAMPLES_PER_SECOND)); // 1s buffer
+      RETURN_IF_FAILED(InitAudio(10000, SAMPLES_PER_SECOND)); // 10ms buffer
 
       if(WindowHandle) {
         // Window successfully retrieved!
