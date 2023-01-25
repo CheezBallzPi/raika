@@ -444,8 +444,11 @@ int APIENTRY WinMain(
         0
       );
 
+      // Buffer size of 2 frames, 100ns units (why windows)
+      int bufferNS = 2 * targetSecondsPerFrame * 1000 * 10000; 
+
       // Load audio
-      RETURN_IF_FAILED(InitAudio(10000, SAMPLES_PER_SECOND)); // 10ms buffer
+      RETURN_IF_FAILED(InitAudio(bufferNS, SAMPLES_PER_SECOND)); // 10ms buffer
 
       if(WindowHandle) {
         // Window successfully retrieved!
