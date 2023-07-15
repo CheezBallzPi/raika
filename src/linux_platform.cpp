@@ -98,7 +98,7 @@ int main() {
     XCB_PROP_MODE_REPLACE, 
     window, 
     (*protocols_reply).atom, 
-    4, // Supposed to be Type. One day find out what this is or it will drive you mad.
+    XCB_ATOM_ATOM, // Supposed to be Type. One day find out what this is or it will drive you mad.
     32, 
     1, 
     &(*delwin_reply).atom
@@ -111,10 +111,24 @@ int main() {
 
   // Let's start
   running = true;
+
+  // Stuff to send to game
+  game_input gameInput = {};
+  graphics_buffer graphicsBuffer = {};
+  sound_buffer soundBuffer = {};
+
   xcb_generic_event_t *event;
   while(running) {
-    event = xcb_poll_for_event(connection);
-    handleEvent(event);
+    // Handle events first
+    while(event = xcb_poll_for_event(connection)) {;
+      // Run as many events as you can
+      handleEvent(event);
+    }
+
+    // Pass buffers to game
+    // GameUpdateAndRender(&graphicsBuffer, &soundBuffer, &gameInput);
+
+
   }
 
   // Cleanup
