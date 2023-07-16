@@ -2,4 +2,4 @@
 
 mkdir -p build
 cd build
-gcc $BUILD_OPTIONS -Wall ../src/xcb_platform.cpp -lxcb -lm
+gcc $BUILD_OPTIONS -o raika -Wall ../src/xcb_platform.cpp -lxcb -lm
