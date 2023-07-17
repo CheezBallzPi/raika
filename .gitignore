@@ -1,4 +1,5 @@
 build/
+include/
 
 # CMake
 CMakeLists.txt.user
