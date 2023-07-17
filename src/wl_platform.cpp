@@ -33,8 +33,8 @@ static struct wl_doubleBuffer globalDoubleBuffer = {0};
 static bool updateSurface;
 
 // Helpers
-static wl_buffer_with_mem getCurrentBuffer() {
-  if(currentA) {
+static wl_buffer_with_mem getBuffer(bool first) {
+  if(first == currentA) {
     return globalDoubleBuffer.a;
   } else {
     return globalDoubleBuffer.b;
@@ -122,19 +122,50 @@ static const struct xdg_wm_base_listener xdgBase_listener = {
 static void xdgSurface_handle_configure(void *data, struct xdg_surface *surface, uint serial) {
   xdg_surface_ack_configure(surface, serial);
 
-  if(updateSurface) { // Only update if theres something to update
-    struct wl_surface *surface = (wl_surface*) data;
-    struct wl_buffer *currentBuffer = getCurrentBuffer().buffer;
-    currentA = !currentA; // Swap buffers
-    wl_surface_attach(surface, currentBuffer, 0, 0);
-    wl_surface_commit(surface);
-    updateSurface = false;
-  }
+  struct wl_surface *wlsurface = (wl_surface*) data;
+  struct wl_buffer *currentBuffer = getBuffer(true).buffer;
+  wl_surface_attach(wlsurface, currentBuffer, 0, 0);
+  wl_surface_damage_buffer(wlsurface, 0, 0, INT32_MAX, INT32_MAX);
+  wl_surface_commit(wlsurface);
 }
 
 static const struct xdg_surface_listener xdgSurface_listener = {
   .configure = xdgSurface_handle_configure,
 };
+
+// wl_callback
+static void callback_done(void *data, struct wl_callback *cb, uint callback_data);
+static struct wl_callback_listener callback_listener = {
+  .done = callback_done,
+};
+
+static void callback_done(void *data, struct wl_callback *cb, uint callback_data) {
+  struct wl_surface *wlsurface = (wl_surface*) data;
+  wl_callback_destroy(cb);
+  struct wl_callback *newcb = wl_surface_frame(wlsurface);
+  wl_callback_add_listener(newcb, &callback_listener, data);
+  
+  int width = 1920;
+  int height = 1080;
+  int bytesPerPixel = 4;
+
+  struct graphics_buffer graphicsBuffer = {0};
+  struct sound_buffer soundBuffer = {0};
+  struct game_input gameInput = {0};
+
+  graphicsBuffer.memory = getBuffer(false).mem,
+  graphicsBuffer.width = width,
+  graphicsBuffer.height = height,
+  graphicsBuffer.pitch = width * bytesPerPixel;
+
+  GameUpdateAndRender(&graphicsBuffer, &soundBuffer, &gameInput);
+  wl_surface_attach(wlsurface, getBuffer(false).buffer, 0, 0);
+  wl_surface_damage_buffer(wlsurface, 0, 0, INT32_MAX, INT32_MAX);
+  wl_surface_commit(wlsurface);
+  currentA = !currentA;
+}
+
+// Main
 
 int main(int argc, char *argv[]) {
   struct wl_display *display = wl_display_connect(NULL);
@@ -158,7 +189,7 @@ int main(int argc, char *argv[]) {
 
   struct wl_shm_pool *pool = wl_shm_create_pool(globalState.shm, fd, shmMemSize);
   globalDoubleBuffer.a.buffer = wl_shm_pool_create_buffer(pool, 0, width, height, bytesPerPixel * width, WL_SHM_FORMAT_XRGB8888);
-  globalDoubleBuffer.b.buffer = wl_shm_pool_create_buffer(pool, height * bytesPerPixel, width, height, bytesPerPixel * width, WL_SHM_FORMAT_XRGB8888);
+  globalDoubleBuffer.b.buffer = wl_shm_pool_create_buffer(pool, height * width * bytesPerPixel, width, height, bytesPerPixel * width, WL_SHM_FORMAT_XRGB8888);
   globalDoubleBuffer.a.mem = memory;
   globalDoubleBuffer.b.mem = (void*)(((int8_t*) memory) + (bytesPerPixel * width * height));
 
@@ -167,23 +198,14 @@ int main(int argc, char *argv[]) {
   struct xdg_toplevel *xdgToplevel = xdg_surface_get_toplevel(xdgSurface);
   xdg_toplevel_set_title(xdgToplevel, "Raika");
   wl_surface_commit(surface);
-
-  struct graphics_buffer graphicsBuffer = {0};
-  struct sound_buffer soundBuffer = {0};
-  struct game_input gameInput = {0};
+  struct wl_callback *cb = wl_surface_frame(surface);
+  wl_callback_add_listener(cb, &callback_listener, surface);
 
   running = true;
   updateSurface = true;
   while(running) {
     wl_display_dispatch(display);
     wl_display_flush(display);
-    graphicsBuffer.memory = getCurrentBuffer().mem,
-    graphicsBuffer.width = width,
-    graphicsBuffer.height = height,
-    graphicsBuffer.pitch = width * bytesPerPixel;
-
-    GameUpdateAndRender(&graphicsBuffer, &soundBuffer, &gameInput);
-    updateSurface = true;
   }
   // Cleanup
   wl_display_disconnect(display);
