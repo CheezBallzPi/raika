@@ -92,11 +92,11 @@ static void registry_handle_global(
 ) {
 	struct wl_state *state = (wl_state*) data;
   if(strcmp(interface, wl_compositor_interface.name) == 0) {
-    state->compositor = (wl_compositor*) wl_registry_bind(registry, name, &wl_compositor_interface, 4);
+    state->compositor = (wl_compositor*) wl_registry_bind(registry, name, &wl_compositor_interface, version);
   } else if(strcmp(interface, wl_shm_interface.name) == 0) {
-    state->shm = (wl_shm*) wl_registry_bind(registry, name, &wl_shm_interface, 1);
+    state->shm = (wl_shm*) wl_registry_bind(registry, name, &wl_shm_interface, version);
   } else if(strcmp(interface, xdg_wm_base_interface.name) == 0) {
-    state->xdgBase = (xdg_wm_base*) wl_registry_bind(registry, name, &xdg_wm_base_interface, 1);
+    state->xdgBase = (xdg_wm_base*) wl_registry_bind(registry, name, &xdg_wm_base_interface, version);
   } 
 }
 
@@ -128,6 +128,7 @@ static void xdgSurface_handle_configure(void *data, struct xdg_surface *surface,
     currentA = !currentA; // Swap buffers
     wl_surface_attach(surface, currentBuffer, 0, 0);
     wl_surface_commit(surface);
+    updateSurface = false;
   }
 }
 
@@ -162,7 +163,7 @@ int main(int argc, char *argv[]) {
   globalDoubleBuffer.b.mem = (void*)(((int8_t*) memory) + (bytesPerPixel * width * height));
 
   struct xdg_surface *xdgSurface = xdg_wm_base_get_xdg_surface(globalState.xdgBase, surface);
-  xdg_surface_add_listener(xdgSurface, &xdgSurface_listener, NULL);
+  xdg_surface_add_listener(xdgSurface, &xdgSurface_listener, surface);
   struct xdg_toplevel *xdgToplevel = xdg_surface_get_toplevel(xdgSurface);
   xdg_toplevel_set_title(xdgToplevel, "Raika");
   wl_surface_commit(surface);
@@ -172,6 +173,7 @@ int main(int argc, char *argv[]) {
   struct game_input gameInput = {0};
 
   running = true;
+  updateSurface = true;
   while(running) {
     wl_display_dispatch(display);
     wl_display_flush(display);
