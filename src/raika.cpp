@@ -40,7 +40,7 @@ static void RenderGradient(
       uint32_t *pixel = (uint32_t *) row;
       for(int x = 0; x < buffer->width; ++x) {
         uint8_t blue = x + xoffset;
-        uint8_t green = y;
+        uint8_t green = y + yoffset;
         uint8_t red = 0;
 
         *pixel++ = (red << 16) | (green << 8) | (blue);
@@ -59,8 +59,8 @@ static void GameUpdateAndRender(
 ) {
     player_controller playerInput = gameInput->keyboard;
     int waveHz = 256 + (playerInput.buttons[0] ? 200 : 0);
-    xoffset += playerInput.dpad[0] ? 10 : 1;
-    yoffset += playerInput.dpad[1] ? 10 : 1;
+    xoffset += playerInput.dpad[0] ? 10 : 0;
+    yoffset += playerInput.dpad[1] ? 10 : 0;
     GameOutputSound(soundBuffer, waveHz);
     if(playerInput.buttons[0]) {
       RenderGradient(graphicsBuffer, xoffset, yoffset);

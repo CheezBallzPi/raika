@@ -31,10 +31,11 @@ struct wl_doubleBuffer {
 // globals
 static bool running;
 static bool currentA;
-static struct wl_state globalState = {0};
-static struct wl_doubleBuffer globalDoubleBuffer = {0};
+static struct wl_state globalState;
+static struct wl_doubleBuffer globalDoubleBuffer;
 static bool updateSurface;
 static struct xkb_state *xkbState;
+static struct game_input globalGameInput;
 
 // Helpers
 static wl_buffer_with_mem getBuffer(bool first) {
@@ -128,14 +129,13 @@ static void callback_done(void *data, struct wl_callback *cb, uint callback_data
 
   struct graphics_buffer graphicsBuffer = {0};
   struct sound_buffer soundBuffer = {0};
-  struct game_input gameInput = {0};
 
   graphicsBuffer.memory = getBuffer(false).mem,
   graphicsBuffer.width = width,
   graphicsBuffer.height = height,
   graphicsBuffer.pitch = width * bytesPerPixel;
 
-  GameUpdateAndRender(&graphicsBuffer, &soundBuffer, &gameInput);
+  GameUpdateAndRender(&graphicsBuffer, &soundBuffer, &globalGameInput);
   wl_surface_attach(wlsurface, getBuffer(false).buffer, 0, 0);
   wl_surface_damage_buffer(wlsurface, 0, 0, INT32_MAX, INT32_MAX);
   wl_surface_commit(wlsurface);
@@ -166,14 +166,33 @@ static void keyboard_handle_key(void *data, wl_keyboard *kb, uint serial, uint t
   uint scancode = key + 8; // wl to xkb
   xkb_keysym_t sym = xkb_state_key_get_one_sym(xkbState, scancode);
   switch(sym) {
+    case XKB_KEY_w: 
+    case XKB_KEY_W: {
+      globalGameInput.keyboard.dpad[0] = state;
+      break;
+    }
+    case XKB_KEY_a: 
+    case XKB_KEY_A: {
+      globalGameInput.keyboard.dpad[2] = state;
+      break;
+    }
+    case XKB_KEY_s: 
+    case XKB_KEY_S: {
+      globalGameInput.keyboard.dpad[1] = state;
+      break;
+    }
+    case XKB_KEY_d: 
+    case XKB_KEY_D: {
+      globalGameInput.keyboard.dpad[3] = state;
+      break;
+    }
     default: {
       printf("XKB Code: 0x%08X (%d)\n", sym, state);
     }
   }
-
-  char buf[128];
-  xkb_state_key_get_utf8(xkbState, scancode, buf, sizeof(buf));
-  printf("UTF-8 input: %s\n", buf);
+  // char buf[128];
+  // xkb_state_key_get_utf8(xkbState, scancode, buf, sizeof(buf));
+  // printf("UTF-8 input: %s\n", buf);
 }
 static void keyboard_handle_modifiers(void *data, wl_keyboard *kb, uint serial, uint mods_depressed, uint mods_latched, uint mods_locked, uint group) {
   xkb_state_update_mask(xkbState, mods_depressed, mods_latched, mods_locked, 0, 0, group);
@@ -241,6 +260,11 @@ static const struct wl_registry_listener registry_listener = {
 // Main
 
 int main(int argc, char *argv[]) {
+  globalState = {0};
+  globalDoubleBuffer = {0};
+  xkbState = {0};
+  globalGameInput = {0};
+
   struct wl_display *display = wl_display_connect(NULL);
   if(!display) {
     fprintf(stderr, "Failed to connect to Wayland display.\n");
