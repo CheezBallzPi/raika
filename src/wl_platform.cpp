@@ -6,13 +6,16 @@
 #include <time.h>
 #include <errno.h>
 #include <unistd.h>
+#include <assert.h>
 #include <wayland-client.h>
 #include "../build/xdg-shell-client-protocol.h"
+#include <xkbcommon/xkbcommon.h>
 
 struct wl_state { // This will hold the stuff we grab from wl_display
   struct wl_compositor *compositor;
   struct wl_shm *shm;
   struct xdg_wm_base *xdgBase;
+  struct wl_seat *seat;
 };
 
 struct wl_buffer_with_mem {
@@ -31,6 +34,7 @@ static bool currentA;
 static struct wl_state globalState = {0};
 static struct wl_doubleBuffer globalDoubleBuffer = {0};
 static bool updateSurface;
+static struct xkb_state *xkbState;
 
 // Helpers
 static wl_buffer_with_mem getBuffer(bool first) {
@@ -82,33 +86,6 @@ int allocate_shm_file(size_t size) {
 }
 
 // Listeners
-// wl_registry
-static void registry_handle_global(
-  void *data, 
-  struct wl_registry *registry, 
-  uint32_t name, 
-  const char *interface, 
-  uint32_t version
-) {
-	struct wl_state *state = (wl_state*) data;
-  if(strcmp(interface, wl_compositor_interface.name) == 0) {
-    state->compositor = (wl_compositor*) wl_registry_bind(registry, name, &wl_compositor_interface, version);
-  } else if(strcmp(interface, wl_shm_interface.name) == 0) {
-    state->shm = (wl_shm*) wl_registry_bind(registry, name, &wl_shm_interface, version);
-  } else if(strcmp(interface, xdg_wm_base_interface.name) == 0) {
-    state->xdgBase = (xdg_wm_base*) wl_registry_bind(registry, name, &xdg_wm_base_interface, version);
-  } 
-}
-
-static void registry_handle_global_remove(void *data, struct wl_registry *registry, uint32_t name) {
-	// This space deliberately left blank
-}
-
-static const struct wl_registry_listener registry_listener = {
-	.global = registry_handle_global,
-	.global_remove = registry_handle_global_remove,
-};
-
 // xdg_wm_base
 static void xdgBase_handle_ping(void *data, struct xdg_wm_base *wmBase, uint serial) {
   xdg_wm_base_pong(wmBase, serial);
@@ -135,7 +112,7 @@ static const struct xdg_surface_listener xdgSurface_listener = {
 
 // wl_callback
 static void callback_done(void *data, struct wl_callback *cb, uint callback_data);
-static struct wl_callback_listener callback_listener = {
+static const struct wl_callback_listener callback_listener = {
   .done = callback_done,
 };
 
@@ -164,6 +141,102 @@ static void callback_done(void *data, struct wl_callback *cb, uint callback_data
   wl_surface_commit(wlsurface);
   currentA = !currentA;
 }
+
+// wl_keyboard
+static void keyboard_handle_keymap(void *data, wl_keyboard *kb, uint format, int fd, uint size) {
+  struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+
+  assert(format == WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1);
+  const char *map_shm = (char*) mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+  assert(map_shm != MAP_FAILED);
+  struct xkb_keymap *keymap = xkb_keymap_new_from_string(
+    context, map_shm, XKB_KEYMAP_FORMAT_TEXT_V1, XKB_KEYMAP_COMPILE_NO_FLAGS
+  );
+  munmap((void*)map_shm, size);
+  close(fd);
+  xkbState = xkb_state_new(keymap);
+}
+static void keyboard_handle_enter(void *data, wl_keyboard *kb, uint serial, wl_surface *surface, wl_array *keys) {
+  // Intentionally do nothing
+}
+static void keyboard_handle_leave(void *data, wl_keyboard *kb, uint serial, wl_surface *surface) {
+  // Intentionally do nothing
+}
+static void keyboard_handle_key(void *data, wl_keyboard *kb, uint serial, uint time, uint key, uint state) {
+  uint scancode = key + 8; // wl to xkb
+  xkb_keysym_t sym = xkb_state_key_get_one_sym(xkbState, scancode);
+  switch(sym) {
+    default: {
+      printf("XKB Code: 0x%08X (%d)\n", sym, state);
+    }
+  }
+
+  char buf[128];
+  xkb_state_key_get_utf8(xkbState, scancode, buf, sizeof(buf));
+  printf("UTF-8 input: %s\n", buf);
+}
+static void keyboard_handle_modifiers(void *data, wl_keyboard *kb, uint serial, uint mods_depressed, uint mods_latched, uint mods_locked, uint group) {
+  xkb_state_update_mask(xkbState, mods_depressed, mods_latched, mods_locked, 0, 0, group);
+}
+static void keyboard_handle_repeat_info(void *data, wl_keyboard *kb, int rate, int delay) {
+  // Intentionally do nothing
+}
+
+static const struct wl_keyboard_listener keyboard_listener = {
+  .keymap = keyboard_handle_keymap,
+  .enter = keyboard_handle_enter,
+  .leave = keyboard_handle_leave,
+  .key = keyboard_handle_key,
+  .modifiers = keyboard_handle_modifiers,
+  .repeat_info = keyboard_handle_repeat_info,
+};
+
+// wl_seat
+static void seat_handle_capabilities(void *data, wl_seat *seat, uint capabilities) {
+  if(capabilities & WL_SEAT_CAPABILITY_KEYBOARD) {
+    struct wl_keyboard *kb = wl_seat_get_keyboard(seat);
+    wl_keyboard_add_listener(kb, &keyboard_listener, NULL);
+  }
+}
+
+static void seat_handle_name(void *data, wl_seat *seat, const char *name) {
+  // Intentionally do nothing
+}
+
+static const struct wl_seat_listener seat_listener = {
+  .capabilities = seat_handle_capabilities,
+  .name = seat_handle_name,
+};
+
+// wl_registry
+static void registry_handle_global(
+  void *data, 
+  struct wl_registry *registry, 
+  uint32_t name, 
+  const char *interface, 
+  uint32_t version
+) {
+	struct wl_state *state = (wl_state*) data;
+  if(strcmp(interface, wl_compositor_interface.name) == 0) {
+    state->compositor = (wl_compositor*) wl_registry_bind(registry, name, &wl_compositor_interface, version);
+  } else if(strcmp(interface, wl_shm_interface.name) == 0) {
+    state->shm = (wl_shm*) wl_registry_bind(registry, name, &wl_shm_interface, version);
+  } else if(strcmp(interface, xdg_wm_base_interface.name) == 0) {
+    state->xdgBase = (xdg_wm_base*) wl_registry_bind(registry, name, &xdg_wm_base_interface, version);
+  } else if(strcmp(interface, wl_seat_interface.name) == 0) {
+    state->seat = (wl_seat*) wl_registry_bind(registry, name, &wl_seat_interface, version);
+    wl_seat_add_listener(state->seat, &seat_listener, NULL);
+  } 
+}
+
+static void registry_handle_global_remove(void *data, struct wl_registry *registry, uint32_t name) {
+	// This space deliberately left blank
+}
+
+static const struct wl_registry_listener registry_listener = {
+	.global = registry_handle_global,
+	.global_remove = registry_handle_global_remove,
+};
 
 // Main
 

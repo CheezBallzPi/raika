@@ -40,7 +40,7 @@ static void RenderGradient(
       uint32_t *pixel = (uint32_t *) row;
       for(int x = 0; x < buffer->width; ++x) {
         uint8_t blue = x + xoffset;
-        uint8_t green = y + yoffset;
+        uint8_t green = y;
         uint8_t red = 0;
 
         *pixel++ = (red << 16) | (green << 8) | (blue);

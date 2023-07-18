@@ -15,4 +15,4 @@ wayland-scanner client-header \
   > xdg-shell-client-protocol.h
 fi
 
-gcc $BUILD_OPTIONS -o raika -Wall ../src/wl_platform.cpp xdg-shell-protocol.c -lwayland-client -lm -lrt
+gcc $BUILD_OPTIONS -o raika -Wall ../src/wl_platform.cpp xdg-shell-protocol.c -lwayland-client -lm -lrt -lxkbcommon
