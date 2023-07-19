@@ -10,6 +10,7 @@
 #include <wayland-client.h>
 #include "../build/xdg-shell-client-protocol.h"
 #include <xkbcommon/xkbcommon.h>
+#include <pipewire/pipewire.h>
 
 struct wl_state { // This will hold the stuff we grab from wl_display
   struct wl_compositor *compositor;
@@ -275,6 +276,9 @@ int main(int argc, char *argv[]) {
   wl_display_roundtrip(display); // Run all the events to bind everything
   xdg_wm_base_add_listener(globalState.xdgBase, &xdgBase_listener, NULL);
   struct wl_surface *surface = wl_compositor_create_surface(globalState.compositor);
+
+  // init pipewire
+  pw_init(&argc, &argv);
 
   // init memory
   int width = 1920;
