@@ -7,7 +7,8 @@
 #include <glm/vec4.hpp>
 #include <glm/mat4x4.hpp>
 
-#include <stdio.h>
+#include <stdlib.h>
+#include <malloc.h>
 
 // Globals
 static bool running = false;
@@ -19,7 +20,7 @@ const char *title = "Raika";
 int initSDL() {
   // Init SDL
   if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
-    printf("Failed to initialize SDL. Error: %s\n", SDL_GetError());
+    SDL_Log("Failed to initialize SDL. Error: %s\n", SDL_GetError());
     return -1;
   }
 
@@ -35,14 +36,14 @@ int initSDL() {
   );
 
   if(window == NULL) {
-    printf("Failed to initialize window. Error: %s\n", SDL_GetError());
+    SDL_Log("Failed to initialize window. Error: %s\n", SDL_GetError());
     return -1;
   }
 
   windowSurface = SDL_GetWindowSurface(window);
 
   if(windowSurface == NULL) {
-    printf("Failed to initialize surface. Error: %s\n", SDL_GetError());
+    SDL_Log("Failed to initialize surface. Error: %s\n", SDL_GetError());
     return -1;
   }
   return 0;
@@ -58,12 +59,12 @@ int cleanupSDL() {
 SDL_Surface* loadImage(char* path) {
   SDL_RWops* file = SDL_RWFromFile(path, "r");
   if(file == NULL) {
-    printf("Failed to initialize file. Error: %s\n", SDL_GetError());
+    SDL_Log("Failed to initialize file. Error: %s\n", SDL_GetError());
     return NULL;
   }
   SDL_Surface* surface = SDL_LoadBMP_RW(file, 1);
   if(surface == NULL) {
-    printf("Failed to initialize surface from file. Error: %s\n", SDL_GetError());
+    SDL_Log("Failed to initialize surface from file. Error: %s\n", SDL_GetError());
     return NULL;
   }
   return surface;
@@ -74,10 +75,10 @@ int main(int argc, char *argv[]) {
   
   uint32_t extensionCount = 0;
   SDL_Vulkan_GetInstanceExtensions(window, &extensionCount, NULL);
-  printf("Extension Count: %d\n", extensionCount);
+  SDL_Log("Extension Count: %d\n", extensionCount);
   const char** extensions = (const char**) malloc(sizeof(const char*) * extensionCount);
   SDL_Vulkan_GetInstanceExtensions(window, &extensionCount, extensions);
-  printf("Extensions written: %d\n", extensionCount);
+  SDL_Log("Extensions written: %d\n", extensionCount);
 
   VkApplicationInfo appInfo = {};
   appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
