@@ -17,6 +17,7 @@ static SDL_Window *window = NULL;
 static SDL_Surface *windowSurface = NULL;
 static VkInstance vulkanInstance = NULL;
 static VkDebugUtilsMessengerEXT debugMessenger = NULL;
+static VkPhysicalDevice device = VK_NULL_HANDLE;
 static VkResult res = VK_SUCCESS;
 
 // Function load macro
@@ -33,6 +34,9 @@ static PFN_vkCreateInstance fnCreateInstance = NULL;
 static PFN_vkDestroyInstance fnDestroyInstance = NULL;
 static PFN_vkCreateDebugUtilsMessengerEXT fnCreateDebugUtilsMessengerEXT = NULL;
 static PFN_vkDestroyDebugUtilsMessengerEXT fnDestroyDebugUtilsMessengerEXT = NULL;
+static PFN_vkEnumeratePhysicalDevices fnEnumeratePhysicalDevices = NULL;
+static PFN_vkGetPhysicalDeviceProperties fnGetPhysicalDeviceProperties = NULL;
+static PFN_vkGetPhysicalDeviceFeatures fnGetPhysicalDeviceFeatures = NULL;
 
 static const char *title = "Raika";
 static const char* layers[1] = {"VK_LAYER_KHRONOS_validation"};
@@ -50,16 +54,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   return VK_FALSE;
 }
 
-int initSDL() {
-  // Init SDL
-  if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
-    SDL_Log("Failed to initialize SDL. Error: %s\n", SDL_GetError());
-    return -1;
-  }
-
-  // Load vulkan driver
-  SDL_Vulkan_LoadLibrary(NULL);
-
+int initVulkan() {
   // Load getInstanceProcAddr so we can load other functions later
   fnGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr) SDL_Vulkan_GetVkGetInstanceProcAddr();
   // Load global functions
@@ -171,7 +166,11 @@ int initSDL() {
 
   // Load functions
   LOAD_VK_FN(vulkanInstance, DestroyInstance);
+  LOAD_VK_FN(vulkanInstance, EnumeratePhysicalDevices);
+  LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceProperties);
+  LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceFeatures);
 
+  // Create debug messenger
   if(!layerMissing && !extensionMissing) {
     LOAD_VK_FN(vulkanInstance, CreateDebugUtilsMessengerEXT);
     LOAD_VK_FN(vulkanInstance, DestroyDebugUtilsMessengerEXT);
@@ -180,6 +179,51 @@ int initSDL() {
     }
   }
 
+  // Get physical devices
+  uint32_t deviceCount = 0;
+  if(fnEnumeratePhysicalDevices(vulkanInstance, &deviceCount, NULL) != VK_SUCCESS) {
+    SDL_Log("Error getting device count: %s\n", SDL_GetError());
+    return -1;
+  };
+  SDL_Log("Devices count: %d\n", deviceCount);
+  VkPhysicalDevice* devices = (VkPhysicalDevice*) malloc(sizeof(VkPhysicalDevice) * deviceCount);
+  fnEnumeratePhysicalDevices(vulkanInstance, &deviceCount, devices);
+  SDL_Log("Devices written: %d\n", deviceCount);
+
+  // Check suitability
+  for(int i = 0; i < deviceCount; i++) {
+    VkPhysicalDeviceProperties deviceProperties;
+    VkPhysicalDeviceFeatures deviceFeatures;
+    fnGetPhysicalDeviceProperties(devices[i], &deviceProperties);
+    fnGetPhysicalDeviceFeatures(devices[i], &deviceFeatures);
+
+    if(true) { // TODO: Check suitability
+      SDL_Log("Found suitable device: %s\n", deviceProperties.deviceName);
+      device = devices[i];
+      break;
+    }
+  }
+
+  if(device == VK_NULL_HANDLE) {
+    // No suitable device found
+    SDL_Log("Failed to find suitable physical device.\n");
+    return -1;
+  }
+
+  return 0;
+}
+
+int initSDL() {
+  // Init SDL
+  if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
+    SDL_Log("Failed to initialize SDL. Error: %s\n", SDL_GetError());
+    return -1;
+  }
+
+  // Load vulkan driver
+  SDL_Vulkan_LoadLibrary(NULL);
+  // Start vulkan
+  initVulkan();
 
   // Create window
   window = SDL_CreateWindow(
@@ -197,13 +241,16 @@ int initSDL() {
   return 0;
 }
 
-int cleanupSDL() {
-  // Cleanup
+void cleanupVulkan() {
   fnDestroyDebugUtilsMessengerEXT(vulkanInstance, debugMessenger, NULL);
   fnDestroyInstance(vulkanInstance, NULL);
+}
+
+void cleanupSDL() {
+  // Cleanup
+  cleanupVulkan();
   SDL_DestroyWindow(window);
   SDL_Quit();
-  return 0;
 }
 
 int main(int argc, char *argv[]) {
