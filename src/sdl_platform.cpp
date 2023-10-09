@@ -16,9 +16,12 @@ static bool running = false;
 static SDL_Window *window = NULL;
 static SDL_Surface *windowSurface = NULL;
 static VkInstance vulkanInstance = NULL;
+static VkDevice vulkanLogicalDevice = NULL;
+static VkQueue vulkanGraphicsQueue = NULL;
 static VkDebugUtilsMessengerEXT debugMessenger = NULL;
-static VkPhysicalDevice device = VK_NULL_HANDLE;
+static VkPhysicalDevice vulkanPhysicalDevice = VK_NULL_HANDLE;
 static VkResult res = VK_SUCCESS;
+static uint32_t graphicsQueueIndex = 0;
 
 // Function load macro
 #define LOAD_VK_FN(INSTANCE, NAME) do { \
@@ -37,6 +40,10 @@ static PFN_vkDestroyDebugUtilsMessengerEXT fnDestroyDebugUtilsMessengerEXT = NUL
 static PFN_vkEnumeratePhysicalDevices fnEnumeratePhysicalDevices = NULL;
 static PFN_vkGetPhysicalDeviceProperties fnGetPhysicalDeviceProperties = NULL;
 static PFN_vkGetPhysicalDeviceFeatures fnGetPhysicalDeviceFeatures = NULL;
+static PFN_vkGetPhysicalDeviceQueueFamilyProperties fnGetPhysicalDeviceQueueFamilyProperties = NULL;
+static PFN_vkCreateDevice fnCreateDevice = NULL;
+static PFN_vkDestroyDevice fnDestroyDevice = NULL;
+static PFN_vkGetDeviceQueue fnGetDeviceQueue = NULL;
 
 static const char *title = "Raika";
 static const char* layers[1] = {"VK_LAYER_KHRONOS_validation"};
@@ -64,7 +71,7 @@ int initVulkan() {
 
   uint32_t availableExtensionCount = 0;
   if((res = fnEnumerateInstanceExtensionProperties(NULL, &availableExtensionCount, NULL)) != VK_SUCCESS) {
-    SDL_Log("Error getting extensions: %d\n", res);
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting extensions: %d\n", res);
     return res;
   };
   SDL_Log("Extension Count: %d\n", availableExtensionCount);
@@ -86,7 +93,7 @@ int initVulkan() {
       }
     }
     if(!extensionFound) {
-      SDL_Log("Couldn't find extension %s\n", extensions[i]);
+      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Couldn't find extension %s\n", extensions[i]);
       extensionMissing = true;
       break;
     }
@@ -102,7 +109,7 @@ int initVulkan() {
 
   uint32_t availableLayerCount;
   if(fnEnumerateInstanceLayerProperties(&availableLayerCount, NULL) != VK_SUCCESS) {
-    SDL_Log("Error getting layer count: %s\n", SDL_GetError());
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting layer count: %s\n", SDL_GetError());
     return -1;
   };
   SDL_Log("Layers count: %d\n", availableLayerCount);
@@ -124,7 +131,7 @@ int initVulkan() {
       }
     }
     if(!layerFound) {
-      SDL_Log("Couldn't find layer %s\n", layers[i]);
+      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Couldn't find layer %s\n", layers[i]);
       layerMissing = true;
       break;
     }
@@ -161,7 +168,7 @@ int initVulkan() {
   }
 
   if(fnCreateInstance(&instanceCreateInfo, nullptr, &vulkanInstance) != VK_SUCCESS) {
-    SDL_Log("Failed to make vulkan instance\n");
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make vulkan instance\n");
   };
 
   // Load functions
@@ -169,20 +176,23 @@ int initVulkan() {
   LOAD_VK_FN(vulkanInstance, EnumeratePhysicalDevices);
   LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceProperties);
   LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceFeatures);
+  LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceQueueFamilyProperties);
+  LOAD_VK_FN(vulkanInstance, CreateDevice);
+  LOAD_VK_FN(vulkanInstance, GetDeviceQueue);
 
   // Create debug messenger
   if(!layerMissing && !extensionMissing) {
     LOAD_VK_FN(vulkanInstance, CreateDebugUtilsMessengerEXT);
     LOAD_VK_FN(vulkanInstance, DestroyDebugUtilsMessengerEXT);
     if(fnCreateDebugUtilsMessengerEXT(vulkanInstance, &debugCreateInfo, NULL, &debugMessenger) != VK_SUCCESS) {
-      SDL_Log("Failed to make debug messenger\n");
+      SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make debug messenger\n");
     }
   }
 
   // Get physical devices
   uint32_t deviceCount = 0;
   if(fnEnumeratePhysicalDevices(vulkanInstance, &deviceCount, NULL) != VK_SUCCESS) {
-    SDL_Log("Error getting device count: %s\n", SDL_GetError());
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting device count: %s\n", SDL_GetError());
     return -1;
   };
   SDL_Log("Devices count: %d\n", deviceCount);
@@ -197,26 +207,64 @@ int initVulkan() {
     fnGetPhysicalDeviceProperties(devices[i], &deviceProperties);
     fnGetPhysicalDeviceFeatures(devices[i], &deviceFeatures);
 
-    if(true) { // TODO: Check suitability
-      SDL_Log("Found suitable device: %s\n", deviceProperties.deviceName);
-      device = devices[i];
-      break;
+    SDL_Log("Checking device: %s\n", deviceProperties.deviceName);
+    // Get queue families for the device we found
+    uint32_t availableQueueCount = 0;
+    fnGetPhysicalDeviceQueueFamilyProperties(devices[i], &availableQueueCount, NULL);
+    SDL_Log("Queues count: %d\n", availableQueueCount);
+    VkQueueFamilyProperties* availableQueues = (VkQueueFamilyProperties*) malloc(sizeof(VkQueueFamilyProperties) * availableQueueCount);
+    fnGetPhysicalDeviceQueueFamilyProperties(devices[i], &availableQueueCount, availableQueues);
+    SDL_Log("Queues written: %d\n", availableQueueCount);
+
+    for(int j = 0; j < availableQueueCount; j++) {
+      if(availableQueues[j].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+        SDL_Log("Found queue: %d (Count: %d)\n", j, availableQueues[j].queueCount);
+        graphicsQueueIndex = j; 
+
+        SDL_Log("Found suitable physical device: %s\n", deviceProperties.deviceName);
+        vulkanPhysicalDevice = devices[i];
+
+        // Create logical device from physical queue
+        VkDeviceQueueCreateInfo queueCreateInfos[1] = {};
+        queueCreateInfos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queueCreateInfos[0].queueFamilyIndex = graphicsQueueIndex;
+        queueCreateInfos[0].queueCount = 1;
+        const float priorities[1] = { 1.0f };
+        queueCreateInfos[0].pQueuePriorities = priorities;
+        
+        VkDeviceCreateInfo logicalDeviceCreateInfo = {};
+        logicalDeviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        logicalDeviceCreateInfo.queueCreateInfoCount = 1;
+        logicalDeviceCreateInfo.pQueueCreateInfos = queueCreateInfos;
+        logicalDeviceCreateInfo.enabledExtensionCount = 0;
+        logicalDeviceCreateInfo.ppEnabledExtensionNames = NULL; // Enable extensions here if needed later
+        logicalDeviceCreateInfo.pEnabledFeatures = NULL; // Enable features here if needed later
+
+        if((res = fnCreateDevice(vulkanPhysicalDevice, &logicalDeviceCreateInfo, NULL, &vulkanLogicalDevice)) != VK_SUCCESS) {
+          SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize logical device: %d\n", res);
+        }
+
+        fnGetDeviceQueue(vulkanLogicalDevice, graphicsQueueIndex, 0, &vulkanGraphicsQueue);
+
+        SDL_Log("Successfully initialized Vulkan.\n");
+        return 0;
+      }
     }
+    SDL_Log("Couldn't find queue that supports graphics, moving on to next...\n");
   }
 
-  if(device == VK_NULL_HANDLE) {
+  if(vulkanPhysicalDevice == VK_NULL_HANDLE) {
     // No suitable device found
-    SDL_Log("Failed to find suitable physical device.\n");
-    return -1;
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to find suitable physical device.\n");
   }
-
-  return 0;
+  SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize Vulkan.\n");
+  return -1;
 }
 
 int initSDL() {
   // Init SDL
   if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
-    SDL_Log("Failed to initialize SDL. Error: %s\n", SDL_GetError());
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize SDL. Error: %s\n", SDL_GetError());
     return -1;
   }
 
@@ -234,7 +282,7 @@ int initSDL() {
   );
 
   if(window == NULL) {
-    SDL_Log("Failed to initialize window. Error: %s\n", SDL_GetError());
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize window. Error: %s\n", SDL_GetError());
     return -1;
   }
 
@@ -242,6 +290,7 @@ int initSDL() {
 }
 
 void cleanupVulkan() {
+  fnDestroyDevice(vulkanLogicalDevice, NULL);
   fnDestroyDebugUtilsMessengerEXT(vulkanInstance, debugMessenger, NULL);
   fnDestroyInstance(vulkanInstance, NULL);
 }
@@ -264,12 +313,12 @@ int main(int argc, char *argv[]) {
     while(SDL_PollEvent(&event)) {
       switch(event.type) {
         case SDL_QUIT: {
-          printf("Quitting...\n");
+          SDL_Log("Quitting...\n");
           running = false;
           break;
         }
         default: {
-          printf("Unhandled Event: %d\n", event.type);
+          SDL_Log("Unhandled Event: %d\n", event.type);
           break;
         }
       }
