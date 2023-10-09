@@ -11,17 +11,24 @@
 #include <malloc.h>
 #include <string.h>
 
+// Constants
+static const char *title = "Raika";
+static const char* layers[1] = {"VK_LAYER_KHRONOS_validation"};
+static const int layerCount = 1;
+static const char* extensions[1] = {"VK_EXT_debug_utils"};
+static const int extensionCount = 1;
+
 // Globals
 static bool running = false;
 static SDL_Window *window = NULL;
-static SDL_Surface *windowSurface = NULL;
+static VkSurfaceKHR vulkanSurface = NULL;
 static VkInstance vulkanInstance = NULL;
 static VkDevice vulkanLogicalDevice = NULL;
 static VkQueue vulkanGraphicsQueue = NULL;
+static VkQueue vulkanPresentQueue = NULL;
 static VkDebugUtilsMessengerEXT debugMessenger = NULL;
 static VkPhysicalDevice vulkanPhysicalDevice = VK_NULL_HANDLE;
 static VkResult res = VK_SUCCESS;
-static uint32_t graphicsQueueIndex = 0;
 
 // Function load macro
 #define LOAD_VK_FN(INSTANCE, NAME) do { \
@@ -44,12 +51,8 @@ static PFN_vkGetPhysicalDeviceQueueFamilyProperties fnGetPhysicalDeviceQueueFami
 static PFN_vkCreateDevice fnCreateDevice = NULL;
 static PFN_vkDestroyDevice fnDestroyDevice = NULL;
 static PFN_vkGetDeviceQueue fnGetDeviceQueue = NULL;
-
-static const char *title = "Raika";
-static const char* layers[1] = {"VK_LAYER_KHRONOS_validation"};
-static const int layerCount = 1;
-static const char* extensions[1] = {"VK_EXT_debug_utils"};
-static const int extensionCount = 1;
+static PFN_vkDestroySurfaceKHR fnDestroySurfaceKHR = NULL;
+static PFN_vkGetPhysicalDeviceSurfaceSupportKHR fnGetPhysicalDeviceSurfaceSupportKHR = NULL;
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -61,7 +64,29 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   return VK_FALSE;
 }
 
-int initVulkan() {
+int init() {
+  // Init SDL
+  if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize SDL. Error: %s\n", SDL_GetError());
+    return -1;
+  }
+
+  // Load vulkan driver
+  SDL_Vulkan_LoadLibrary(NULL);
+
+  // Create window
+  window = SDL_CreateWindow(
+    title, 
+    SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+    400, 400,
+    SDL_WINDOW_VULKAN
+  );
+
+  if(window == NULL) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize window. Error: %s\n", SDL_GetError());
+    return -1;
+  }
+
   // Load getInstanceProcAddr so we can load other functions later
   fnGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr) SDL_Vulkan_GetVkGetInstanceProcAddr();
   // Load global functions
@@ -79,7 +104,7 @@ int initVulkan() {
   fnEnumerateInstanceExtensionProperties(NULL, &availableExtensionCount, availableExtensions);
   SDL_Log("Extensions written: %d\n", availableExtensionCount);
   for(int i = 0; i < availableExtensionCount; i++) {
-    SDL_Log("Extension %d: %s\n", i + 1, availableExtensions[i]);
+    SDL_Log("Extension %d: %s\n", i + 1, availableExtensions[i].extensionName);
   }
 
   bool extensionMissing = false;
@@ -97,6 +122,48 @@ int initVulkan() {
       extensionMissing = true;
       break;
     }
+  }
+
+  // Check extensions needed for SDL
+  uint32_t sdlNeededExtensionCount = 0;
+  if(SDL_Vulkan_GetInstanceExtensions(window, &sdlNeededExtensionCount, NULL) != SDL_TRUE) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting SDL required extensions\n");
+    return -1;
+  };
+  SDL_Log("SDL Extension Count: %d\n", sdlNeededExtensionCount);
+  const char** sdlNeededExtensions = (const char**) malloc(sizeof(const char*) * sdlNeededExtensionCount);
+  SDL_Vulkan_GetInstanceExtensions(NULL, &sdlNeededExtensionCount, sdlNeededExtensions);
+  SDL_Log("SDL Extensions written: %d\n", sdlNeededExtensionCount);
+  for(int i = 0; i < sdlNeededExtensionCount; i++) {
+    SDL_Log("SDL Extension %d: %s\n", i + 1, sdlNeededExtensions[i]);
+  }
+
+  for(int i = 0; i < sdlNeededExtensionCount; i++) {
+    bool extensionFound = false;
+    for(int j = 0; j < availableExtensionCount; j++) {
+      if(strcmp(sdlNeededExtensions[i], availableExtensions[j].extensionName) == 0) {
+        extensionFound = true;
+        break;
+      }
+    }
+    if(!extensionFound) {
+      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Couldn't find extension %s\n", extensions[i]);
+      extensionMissing = true;
+      break;
+    }
+  }
+
+  // Concatenate two extension arrays
+  const char** requestedExtensions = (const char**) malloc(sizeof(const char*) * (extensionCount + sdlNeededExtensionCount));
+  for(int i = 0; i < extensionCount; i++) {
+    requestedExtensions[i] = extensions[i];
+  }
+  for(int i = 0; i < sdlNeededExtensionCount; i++)  {
+    requestedExtensions[i + extensionCount] = sdlNeededExtensions[i];
+  }
+  SDL_Log("Requesting Extensions:\n");
+  for(int i = 0; i < (extensionCount + sdlNeededExtensionCount); i++)  {
+    SDL_Log("  %s\n", requestedExtensions[i]);
   }
 
   VkApplicationInfo appInfo = {};
@@ -155,14 +222,14 @@ int initVulkan() {
   VkInstanceCreateInfo instanceCreateInfo = {};
   instanceCreateInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
   instanceCreateInfo.pApplicationInfo = &appInfo;
-  instanceCreateInfo.enabledExtensionCount = extensionCount;
-  instanceCreateInfo.ppEnabledExtensionNames = extensions;
+  instanceCreateInfo.enabledExtensionCount = (extensionCount + sdlNeededExtensionCount);
+  instanceCreateInfo.ppEnabledExtensionNames = requestedExtensions;
   if(!layerMissing && !extensionMissing) {
     instanceCreateInfo.enabledLayerCount = layerCount;
     instanceCreateInfo.ppEnabledLayerNames = layers;
     instanceCreateInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*) &debugCreateInfo;
   } else {
-    SDL_Log("Missing validation layer, skipping debug\n");
+    SDL_Log("Missing validation layer or extension, skipping debug\n");
     instanceCreateInfo.enabledLayerCount = 0;
     instanceCreateInfo.ppEnabledLayerNames = NULL;
   }
@@ -179,6 +246,8 @@ int initVulkan() {
   LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceQueueFamilyProperties);
   LOAD_VK_FN(vulkanInstance, CreateDevice);
   LOAD_VK_FN(vulkanInstance, GetDeviceQueue);
+  LOAD_VK_FN(vulkanInstance, DestroySurfaceKHR);
+  LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceSurfaceSupportKHR);
 
   // Create debug messenger
   if(!layerMissing && !extensionMissing) {
@@ -187,6 +256,12 @@ int initVulkan() {
     if(fnCreateDebugUtilsMessengerEXT(vulkanInstance, &debugCreateInfo, NULL, &debugMessenger) != VK_SUCCESS) {
       SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make debug messenger\n");
     }
+  }
+
+  // Create vulkan surface
+  if(SDL_Vulkan_CreateSurface(window, vulkanInstance, &vulkanSurface) != SDL_TRUE) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize Vulkan surface. Error: %s\n", SDL_GetError());
+    return -1;
   }
 
   // Get physical devices
@@ -200,7 +275,7 @@ int initVulkan() {
   fnEnumeratePhysicalDevices(vulkanInstance, &deviceCount, devices);
   SDL_Log("Devices written: %d\n", deviceCount);
 
-  // Check suitability
+  // Check physical device suitability
   for(int i = 0; i < deviceCount; i++) {
     VkPhysicalDeviceProperties deviceProperties;
     VkPhysicalDeviceFeatures deviceFeatures;
@@ -216,80 +291,76 @@ int initVulkan() {
     fnGetPhysicalDeviceQueueFamilyProperties(devices[i], &availableQueueCount, availableQueues);
     SDL_Log("Queues written: %d\n", availableQueueCount);
 
+    uint32_t graphicsQueueIndex = 0;
+    uint32_t presentQueueIndex = 0;
+
+    bool graphicsSupported = false;
+    bool presentSupported = false;
+
     for(int j = 0; j < availableQueueCount; j++) {
       if(availableQueues[j].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-        SDL_Log("Found queue: %d (Count: %d)\n", j, availableQueues[j].queueCount);
+        SDL_Log("Queue %d: Graphics found (Count: %d)\n", j, availableQueues[j].queueCount);
+        graphicsQueueIndex = j;
+        graphicsSupported = true;
+      };
+      VkBool32 surfaceSupported;
+      if(fnGetPhysicalDeviceSurfaceSupportKHR(devices[i], j, vulkanSurface, &surfaceSupported) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to get physical device surface support.\n");
+      };
+      if(surfaceSupported == VK_TRUE) {
+        SDL_Log("Queue %d: Presentation found (Count: %d)\n", j, availableQueues[j].queueCount);
         graphicsQueueIndex = j; 
-
-        SDL_Log("Found suitable physical device: %s\n", deviceProperties.deviceName);
-        vulkanPhysicalDevice = devices[i];
-
-        // Create logical device from physical queue
-        VkDeviceQueueCreateInfo queueCreateInfos[1] = {};
-        queueCreateInfos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        queueCreateInfos[0].queueFamilyIndex = graphicsQueueIndex;
-        queueCreateInfos[0].queueCount = 1;
-        const float priorities[1] = { 1.0f };
-        queueCreateInfos[0].pQueuePriorities = priorities;
-        
-        VkDeviceCreateInfo logicalDeviceCreateInfo = {};
-        logicalDeviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        logicalDeviceCreateInfo.queueCreateInfoCount = 1;
-        logicalDeviceCreateInfo.pQueueCreateInfos = queueCreateInfos;
-        logicalDeviceCreateInfo.enabledExtensionCount = 0;
-        logicalDeviceCreateInfo.ppEnabledExtensionNames = NULL; // Enable extensions here if needed later
-        logicalDeviceCreateInfo.pEnabledFeatures = NULL; // Enable features here if needed later
-
-        if((res = fnCreateDevice(vulkanPhysicalDevice, &logicalDeviceCreateInfo, NULL, &vulkanLogicalDevice)) != VK_SUCCESS) {
-          SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize logical device: %d\n", res);
-        }
-
-        fnGetDeviceQueue(vulkanLogicalDevice, graphicsQueueIndex, 0, &vulkanGraphicsQueue);
-
-        SDL_Log("Successfully initialized Vulkan.\n");
-        return 0;
+        presentSupported = true;
+      };
+      if(graphicsSupported && presentSupported) {
+        // Found needed queues
+        break;
       }
     }
-    SDL_Log("Couldn't find queue that supports graphics, moving on to next...\n");
+
+    if(graphicsSupported && presentSupported) {
+      SDL_Log("Found suitable physical device: %s\n", deviceProperties.deviceName);
+      vulkanPhysicalDevice = devices[i];
+
+      // Create logical device from physical queue
+      VkDeviceQueueCreateInfo queueCreateInfos[1] = {};
+      queueCreateInfos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+      queueCreateInfos[0].queueFamilyIndex = graphicsQueueIndex;
+      queueCreateInfos[0].queueCount = 1;
+      const float priorities[1] = { 1.0f };
+      queueCreateInfos[0].pQueuePriorities = priorities;
+      
+      VkDeviceCreateInfo logicalDeviceCreateInfo = {};
+      logicalDeviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+      logicalDeviceCreateInfo.queueCreateInfoCount = 1;
+      logicalDeviceCreateInfo.pQueueCreateInfos = queueCreateInfos;
+      logicalDeviceCreateInfo.enabledExtensionCount = 0;
+      logicalDeviceCreateInfo.ppEnabledExtensionNames = NULL; // Enable extensions here if needed later
+      logicalDeviceCreateInfo.pEnabledFeatures = NULL; // Enable features here if needed later
+
+      if((res = fnCreateDevice(vulkanPhysicalDevice, &logicalDeviceCreateInfo, NULL, &vulkanLogicalDevice)) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize logical device: %d\n", res);
+      }
+
+      fnGetDeviceQueue(vulkanLogicalDevice, graphicsQueueIndex, 0, &vulkanGraphicsQueue);
+
+      SDL_Log("Successfully initialized Vulkan.\n");
+      return 0;
+    }
+
+    SDL_Log("Couldn't find needed queue support, moving on to next...\n");
   }
 
   if(vulkanPhysicalDevice == VK_NULL_HANDLE) {
     // No suitable device found
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to find suitable physical device.\n");
   }
-  SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize Vulkan.\n");
+
   return -1;
 }
 
-int initSDL() {
-  // Init SDL
-  if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize SDL. Error: %s\n", SDL_GetError());
-    return -1;
-  }
-
-  // Load vulkan driver
-  SDL_Vulkan_LoadLibrary(NULL);
-  // Start vulkan
-  initVulkan();
-
-  // Create window
-  window = SDL_CreateWindow(
-    title, 
-    SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-    400, 400,
-    SDL_WINDOW_VULKAN
-  );
-
-  if(window == NULL) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize window. Error: %s\n", SDL_GetError());
-    return -1;
-  }
-
-  return 0;
-}
-
 void cleanupVulkan() {
+  fnDestroySurfaceKHR(vulkanInstance, vulkanSurface, NULL);
   fnDestroyDevice(vulkanLogicalDevice, NULL);
   fnDestroyDebugUtilsMessengerEXT(vulkanInstance, debugMessenger, NULL);
   fnDestroyInstance(vulkanInstance, NULL);
@@ -303,7 +374,10 @@ void cleanupSDL() {
 }
 
 int main(int argc, char *argv[]) {
-  initSDL();
+  if(init() != 0) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize.\n");
+    return -1;
+  };
 
   SDL_Event event;
 
