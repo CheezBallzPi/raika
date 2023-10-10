@@ -309,7 +309,7 @@ int init() {
       };
       if(surfaceSupported == VK_TRUE) {
         SDL_Log("Queue %d: Presentation found (Count: %d)\n", j, availableQueues[j].queueCount);
-        graphicsQueueIndex = j; 
+        presentQueueIndex = j; 
         presentSupported = true;
       };
       if(graphicsSupported && presentSupported) {
@@ -323,16 +323,22 @@ int init() {
       vulkanPhysicalDevice = devices[i];
 
       // Create logical device from physical queue
-      VkDeviceQueueCreateInfo queueCreateInfos[1] = {};
+      VkDeviceQueueCreateInfo queueCreateInfos[2] = {};
+      const float priorities[1] = { 1.0f };
+
       queueCreateInfos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
       queueCreateInfos[0].queueFamilyIndex = graphicsQueueIndex;
       queueCreateInfos[0].queueCount = 1;
-      const float priorities[1] = { 1.0f };
       queueCreateInfos[0].pQueuePriorities = priorities;
+
+      queueCreateInfos[1].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+      queueCreateInfos[1].queueFamilyIndex = presentQueueIndex;
+      queueCreateInfos[1].queueCount = 1;
+      queueCreateInfos[1].pQueuePriorities = priorities;
       
       VkDeviceCreateInfo logicalDeviceCreateInfo = {};
       logicalDeviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-      logicalDeviceCreateInfo.queueCreateInfoCount = 1;
+      logicalDeviceCreateInfo.queueCreateInfoCount = 2;
       logicalDeviceCreateInfo.pQueueCreateInfos = queueCreateInfos;
       logicalDeviceCreateInfo.enabledExtensionCount = 0;
       logicalDeviceCreateInfo.ppEnabledExtensionNames = NULL; // Enable extensions here if needed later
@@ -343,6 +349,7 @@ int init() {
       }
 
       fnGetDeviceQueue(vulkanLogicalDevice, graphicsQueueIndex, 0, &vulkanGraphicsQueue);
+      fnGetDeviceQueue(vulkanLogicalDevice, presentQueueIndex, 0, &vulkanPresentQueue);
 
       SDL_Log("Successfully initialized Vulkan.\n");
       return 0;
