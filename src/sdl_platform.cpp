@@ -16,6 +16,8 @@
 static const char *title = "Raika";
 static const char* layers[1] = {"VK_LAYER_KHRONOS_validation"};
 static const int layerCount = 1;
+// static const char* layers[0] = {};
+// static const int layerCount = 0;
 static const char* instanceExtensions[1] = {
   VK_EXT_DEBUG_UTILS_EXTENSION_NAME
 };
@@ -377,6 +379,7 @@ int init() {
         queueCreateInfos[i].queueFamilyIndex = queueFamilyIndex;
         queueCreateInfos[i].queueCount = 1;
         queueCreateInfos[i].pQueuePriorities = priorities;
+        queueCreateInfos[i].pNext = NULL;
         i++;
       }
       
@@ -387,6 +390,7 @@ int init() {
       logicalDeviceCreateInfo.enabledExtensionCount = deviceExtensionCount;
       logicalDeviceCreateInfo.ppEnabledExtensionNames = deviceExtensions;
       logicalDeviceCreateInfo.pEnabledFeatures = NULL; // Enable features here if needed later
+      logicalDeviceCreateInfo.pNext = NULL;
 
       if((res = fnCreateDevice(vulkanPhysicalDevice, &logicalDeviceCreateInfo, NULL, &vulkanLogicalDevice)) != VK_SUCCESS) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize logical device: %d\n", res);
