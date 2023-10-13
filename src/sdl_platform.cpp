@@ -10,13 +10,20 @@
 #include <stdlib.h>
 #include <malloc.h>
 #include <string.h>
+#include <set>
 
 // Constants
 static const char *title = "Raika";
 static const char* layers[1] = {"VK_LAYER_KHRONOS_validation"};
 static const int layerCount = 1;
-static const char* extensions[1] = {"VK_EXT_debug_utils"};
-static const int extensionCount = 1;
+static const char* instanceExtensions[1] = {
+  VK_EXT_DEBUG_UTILS_EXTENSION_NAME
+};
+static const int instanceExtensionCount = 1;
+static const char* deviceExtensions[1] = {
+  VK_KHR_SWAPCHAIN_EXTENSION_NAME
+};
+static const int deviceExtensionCount = 1;
 
 // Globals
 static bool running = false;
@@ -53,6 +60,7 @@ static PFN_vkDestroyDevice fnDestroyDevice = NULL;
 static PFN_vkGetDeviceQueue fnGetDeviceQueue = NULL;
 static PFN_vkDestroySurfaceKHR fnDestroySurfaceKHR = NULL;
 static PFN_vkGetPhysicalDeviceSurfaceSupportKHR fnGetPhysicalDeviceSurfaceSupportKHR = NULL;
+static PFN_vkEnumerateDeviceExtensionProperties fnEnumerateDeviceExtensionProperties = NULL;
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -94,32 +102,32 @@ int init() {
   LOAD_VK_FN(NULL, EnumerateInstanceLayerProperties);
   LOAD_VK_FN(NULL, CreateInstance);
 
-  uint32_t availableExtensionCount = 0;
-  if((res = fnEnumerateInstanceExtensionProperties(NULL, &availableExtensionCount, NULL)) != VK_SUCCESS) {
+  uint32_t availableInstanceExtensionCount = 0;
+  if((res = fnEnumerateInstanceExtensionProperties(NULL, &availableInstanceExtensionCount, NULL)) != VK_SUCCESS) {
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting extensions: %d\n", res);
     return res;
   };
-  SDL_Log("Extension Count: %d\n", availableExtensionCount);
-  VkExtensionProperties* availableExtensions = (VkExtensionProperties*) malloc(sizeof(VkExtensionProperties) * availableExtensionCount);
-  fnEnumerateInstanceExtensionProperties(NULL, &availableExtensionCount, availableExtensions);
-  SDL_Log("Extensions written: %d\n", availableExtensionCount);
-  for(int i = 0; i < availableExtensionCount; i++) {
-    SDL_Log("Extension %d: %s\n", i + 1, availableExtensions[i].extensionName);
+  SDL_Log("Extension Count: %d\n", availableInstanceExtensionCount);
+  VkExtensionProperties* availableInstanceExtensions = (VkExtensionProperties*) malloc(sizeof(VkExtensionProperties) * availableInstanceExtensionCount);
+  fnEnumerateInstanceExtensionProperties(NULL, &availableInstanceExtensionCount, availableInstanceExtensions);
+  SDL_Log("Extensions written: %d\n", availableInstanceExtensionCount);
+  for(int i = 0; i < availableInstanceExtensionCount; i++) {
+    SDL_Log("Extension %d: %s\n", i + 1, availableInstanceExtensions[i].extensionName);
   }
 
-  bool extensionMissing = false;
+  bool instanceExtensionMissing = false;
 
-  for(int i = 0; i < extensionCount; i++) {
+  for(int i = 0; i < instanceExtensionCount; i++) {
     bool extensionFound = false;
-    for(int j = 0; j < availableExtensionCount; j++) {
-      if(strcmp(extensions[i], availableExtensions[j].extensionName) == 0) {
+    for(int j = 0; j < availableInstanceExtensionCount; j++) {
+      if(strcmp(instanceExtensions[i], availableInstanceExtensions[j].extensionName) == 0) {
         extensionFound = true;
         break;
       }
     }
     if(!extensionFound) {
-      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Couldn't find extension %s\n", extensions[i]);
-      extensionMissing = true;
+      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Couldn't find extension %s\n", instanceExtensions[i]);
+      instanceExtensionMissing = true;
       break;
     }
   }
@@ -140,29 +148,29 @@ int init() {
 
   for(int i = 0; i < sdlNeededExtensionCount; i++) {
     bool extensionFound = false;
-    for(int j = 0; j < availableExtensionCount; j++) {
-      if(strcmp(sdlNeededExtensions[i], availableExtensions[j].extensionName) == 0) {
+    for(int j = 0; j < availableInstanceExtensionCount; j++) {
+      if(strcmp(sdlNeededExtensions[i], availableInstanceExtensions[j].extensionName) == 0) {
         extensionFound = true;
         break;
       }
     }
     if(!extensionFound) {
-      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Couldn't find extension %s\n", extensions[i]);
-      extensionMissing = true;
+      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Couldn't find extension %s\n", sdlNeededExtensions[i]);
+      instanceExtensionMissing = true;
       break;
     }
   }
 
   // Concatenate two extension arrays
-  const char** requestedExtensions = (const char**) malloc(sizeof(const char*) * (extensionCount + sdlNeededExtensionCount));
-  for(int i = 0; i < extensionCount; i++) {
-    requestedExtensions[i] = extensions[i];
+  const char** requestedExtensions = (const char**) malloc(sizeof(const char*) * (instanceExtensionCount + sdlNeededExtensionCount));
+  for(int i = 0; i < instanceExtensionCount; i++) {
+    requestedExtensions[i] = instanceExtensions[i];
   }
   for(int i = 0; i < sdlNeededExtensionCount; i++)  {
-    requestedExtensions[i + extensionCount] = sdlNeededExtensions[i];
+    requestedExtensions[i + instanceExtensionCount] = sdlNeededExtensions[i];
   }
   SDL_Log("Requesting Extensions:\n");
-  for(int i = 0; i < (extensionCount + sdlNeededExtensionCount); i++)  {
+  for(int i = 0; i < (instanceExtensionCount + sdlNeededExtensionCount); i++)  {
     SDL_Log("  %s\n", requestedExtensions[i]);
   }
 
@@ -222,9 +230,9 @@ int init() {
   VkInstanceCreateInfo instanceCreateInfo = {};
   instanceCreateInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
   instanceCreateInfo.pApplicationInfo = &appInfo;
-  instanceCreateInfo.enabledExtensionCount = (extensionCount + sdlNeededExtensionCount);
+  instanceCreateInfo.enabledExtensionCount = (instanceExtensionCount + sdlNeededExtensionCount);
   instanceCreateInfo.ppEnabledExtensionNames = requestedExtensions;
-  if(!layerMissing && !extensionMissing) {
+  if(!layerMissing && !instanceExtensionMissing) {
     instanceCreateInfo.enabledLayerCount = layerCount;
     instanceCreateInfo.ppEnabledLayerNames = layers;
     instanceCreateInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*) &debugCreateInfo;
@@ -248,9 +256,10 @@ int init() {
   LOAD_VK_FN(vulkanInstance, GetDeviceQueue);
   LOAD_VK_FN(vulkanInstance, DestroySurfaceKHR);
   LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceSurfaceSupportKHR);
+  LOAD_VK_FN(vulkanInstance, EnumerateDeviceExtensionProperties);
 
   // Create debug messenger
-  if(!layerMissing && !extensionMissing) {
+  if(!layerMissing && !instanceExtensionMissing) {
     LOAD_VK_FN(vulkanInstance, CreateDebugUtilsMessengerEXT);
     LOAD_VK_FN(vulkanInstance, DestroyDebugUtilsMessengerEXT);
     if(fnCreateDebugUtilsMessengerEXT(vulkanInstance, &debugCreateInfo, NULL, &debugMessenger) != VK_SUCCESS) {
@@ -283,6 +292,41 @@ int init() {
     fnGetPhysicalDeviceFeatures(devices[i], &deviceFeatures);
 
     SDL_Log("Checking device: %s\n", deviceProperties.deviceName);
+
+    // Check extensions
+    uint32_t availableDeviceExtensionCount = 0;
+    if((res = fnEnumerateDeviceExtensionProperties(devices[i], NULL, &availableDeviceExtensionCount, NULL)) != VK_SUCCESS) {
+      SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting device extensions: %d\n", res);
+      return res;
+    };
+    SDL_Log("Device extension Count: %d\n", availableDeviceExtensionCount);
+    VkExtensionProperties* availableDeviceExtensions = (VkExtensionProperties*) malloc(sizeof(VkExtensionProperties) * availableDeviceExtensionCount);
+    fnEnumerateDeviceExtensionProperties(devices[i], NULL, &availableDeviceExtensionCount, availableDeviceExtensions);
+    SDL_Log("Device extensions written: %d\n", availableDeviceExtensionCount);
+    for(int i = 0; i < availableDeviceExtensionCount; i++) {
+      SDL_Log("Device extension %d: %s\n", i + 1, availableDeviceExtensions[i].extensionName);
+    }
+
+    bool deviceExtensionMissing = false;
+    for(int i = 0; i < deviceExtensionCount; i++) {
+      bool extensionFound = false;
+      for(int j = 0; j < availableDeviceExtensionCount; j++) {
+        if(strcmp(deviceExtensions[i], availableDeviceExtensions[j].extensionName) == 0) {
+          extensionFound = true;
+          break;
+        }
+      }
+      if(!extensionFound) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Couldn't find extension %s\n", deviceExtensions[i]);
+        deviceExtensionMissing = true;
+        break;
+      }
+    }
+    if(deviceExtensionMissing) {
+      SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Extension missing, skipping...\n");
+      continue;
+    }
+
     // Get queue families for the device we found
     uint32_t availableQueueCount = 0;
     fnGetPhysicalDeviceQueueFamilyProperties(devices[i], &availableQueueCount, NULL);
@@ -323,25 +367,25 @@ int init() {
       vulkanPhysicalDevice = devices[i];
 
       // Create logical device from physical queue
-      VkDeviceQueueCreateInfo queueCreateInfos[2] = {};
+      std::set<uint32_t> uniqueQueueFamilyIndex = {graphicsQueueIndex, presentQueueIndex};
+      VkDeviceQueueCreateInfo* queueCreateInfos = (VkDeviceQueueCreateInfo*) malloc(sizeof(VkDeviceQueueCreateInfo) * uniqueQueueFamilyIndex.size());
       const float priorities[1] = { 1.0f };
 
-      queueCreateInfos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-      queueCreateInfos[0].queueFamilyIndex = graphicsQueueIndex;
-      queueCreateInfos[0].queueCount = 1;
-      queueCreateInfos[0].pQueuePriorities = priorities;
-
-      queueCreateInfos[1].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-      queueCreateInfos[1].queueFamilyIndex = presentQueueIndex;
-      queueCreateInfos[1].queueCount = 1;
-      queueCreateInfos[1].pQueuePriorities = priorities;
+      int i = 0;
+      for(uint32_t queueFamilyIndex : uniqueQueueFamilyIndex) {
+        queueCreateInfos[i].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queueCreateInfos[i].queueFamilyIndex = queueFamilyIndex;
+        queueCreateInfos[i].queueCount = 1;
+        queueCreateInfos[i].pQueuePriorities = priorities;
+        i++;
+      }
       
       VkDeviceCreateInfo logicalDeviceCreateInfo = {};
       logicalDeviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-      logicalDeviceCreateInfo.queueCreateInfoCount = 2;
+      logicalDeviceCreateInfo.queueCreateInfoCount = uniqueQueueFamilyIndex.size();
       logicalDeviceCreateInfo.pQueueCreateInfos = queueCreateInfos;
-      logicalDeviceCreateInfo.enabledExtensionCount = 0;
-      logicalDeviceCreateInfo.ppEnabledExtensionNames = NULL; // Enable extensions here if needed later
+      logicalDeviceCreateInfo.enabledExtensionCount = deviceExtensionCount;
+      logicalDeviceCreateInfo.ppEnabledExtensionNames = deviceExtensions;
       logicalDeviceCreateInfo.pEnabledFeatures = NULL; // Enable features here if needed later
 
       if((res = fnCreateDevice(vulkanPhysicalDevice, &logicalDeviceCreateInfo, NULL, &vulkanLogicalDevice)) != VK_SUCCESS) {
