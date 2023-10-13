@@ -63,6 +63,9 @@ static PFN_vkGetDeviceQueue fnGetDeviceQueue = NULL;
 static PFN_vkDestroySurfaceKHR fnDestroySurfaceKHR = NULL;
 static PFN_vkGetPhysicalDeviceSurfaceSupportKHR fnGetPhysicalDeviceSurfaceSupportKHR = NULL;
 static PFN_vkEnumerateDeviceExtensionProperties fnEnumerateDeviceExtensionProperties = NULL;
+static PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR fnGetPhysicalDeviceSurfaceCapabilitiesKHR = NULL;
+static PFN_vkGetPhysicalDeviceSurfaceFormatsKHR fnGetPhysicalDeviceSurfaceFormatsKHR = NULL;
+static PFN_vkGetPhysicalDeviceSurfacePresentModesKHR fnGetPhysicalDeviceSurfacePresentModesKHR = NULL;
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -259,6 +262,9 @@ int init() {
   LOAD_VK_FN(vulkanInstance, DestroySurfaceKHR);
   LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceSurfaceSupportKHR);
   LOAD_VK_FN(vulkanInstance, EnumerateDeviceExtensionProperties);
+  LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceSurfaceCapabilitiesKHR);
+  LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceSurfaceFormatsKHR);
+  LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceSurfacePresentModesKHR);
 
   // Create debug messenger
   if(!layerMissing && !instanceExtensionMissing) {
@@ -399,11 +405,39 @@ int init() {
       fnGetDeviceQueue(vulkanLogicalDevice, graphicsQueueIndex, 0, &vulkanGraphicsQueue);
       fnGetDeviceQueue(vulkanLogicalDevice, presentQueueIndex, 0, &vulkanPresentQueue);
 
-      SDL_Log("Successfully initialized Vulkan.\n");
-      return 0;
+      // Check swapchain capability
+      VkSurfaceCapabilitiesKHR surfaceCapabilities;
+      fnGetPhysicalDeviceSurfaceCapabilitiesKHR(vulkanPhysicalDevice, vulkanSurface, &surfaceCapabilities);
+
+      uint32_t formatCount = 0;
+      if(fnGetPhysicalDeviceSurfaceFormatsKHR(vulkanPhysicalDevice, vulkanSurface, &formatCount, NULL) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting format count: %s\n", SDL_GetError());
+        return -1;
+      };
+      SDL_Log("Format count: %d\n", formatCount);
+      VkSurfaceFormatKHR* formats = (VkSurfaceFormatKHR*) malloc(sizeof(VkSurfaceFormatKHR) * formatCount);
+      fnGetPhysicalDeviceSurfaceFormatsKHR(vulkanPhysicalDevice, vulkanSurface, &formatCount, formats);
+      SDL_Log("Formats written: %d\n", formatCount);
+
+      uint32_t presentModeCount = 0;
+      if(fnGetPhysicalDeviceSurfacePresentModesKHR(vulkanPhysicalDevice, vulkanSurface, &presentModeCount, NULL) != VK_SUCCESS) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting present mode count: %s\n", SDL_GetError());
+        return -1;
+      };
+      SDL_Log("Present mode count: %d\n", presentModeCount);
+      VkPresentModeKHR* presentModes = (VkPresentModeKHR*) malloc(sizeof(VkPresentModeKHR) * presentModeCount);
+      fnGetPhysicalDeviceSurfacePresentModesKHR(vulkanPhysicalDevice, vulkanSurface, &presentModeCount, presentModes);
+      SDL_Log("Present modes written: %d\n", presentModeCount);
+
+      if(formatCount > 0 && presentModeCount > 0) {
+        SDL_Log("Successfully initialized Vulkan.\n");
+        return 0;
+      } else {
+        SDL_Log("Format and present mode are needed, skipping...\n");
+      }
     }
 
-    SDL_Log("Couldn't find needed queue support, moving on to next...\n");
+    SDL_Log("Couldn't find needed support, moving on to next...\n");
   }
 
   if(vulkanPhysicalDevice == VK_NULL_HANDLE) {
