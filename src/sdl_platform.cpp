@@ -31,6 +31,9 @@ static const int deviceExtensionCount = 1;
 static bool running = false;
 static SDL_Window *window = NULL;
 static VkSurfaceKHR vulkanSurface = NULL;
+static VkSwapchainKHR vulkanSwapchain = NULL;
+static uint32_t vulkanSwapchainImageCount = 0;
+static VkImage* vulkanSwapchainImages = NULL;
 static VkInstance vulkanInstance = NULL;
 static VkDevice vulkanLogicalDevice = NULL;
 static VkQueue vulkanGraphicsQueue = NULL;
@@ -66,6 +69,9 @@ static PFN_vkEnumerateDeviceExtensionProperties fnEnumerateDeviceExtensionProper
 static PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR fnGetPhysicalDeviceSurfaceCapabilitiesKHR = NULL;
 static PFN_vkGetPhysicalDeviceSurfaceFormatsKHR fnGetPhysicalDeviceSurfaceFormatsKHR = NULL;
 static PFN_vkGetPhysicalDeviceSurfacePresentModesKHR fnGetPhysicalDeviceSurfacePresentModesKHR = NULL;
+static PFN_vkCreateSwapchainKHR fnCreateSwapchainKHR = NULL;
+static PFN_vkDestroySwapchainKHR fnDestroySwapchainKHR = NULL;
+static PFN_vkGetSwapchainImagesKHR fnGetSwapchainImagesKHR = NULL;
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -265,6 +271,9 @@ int init() {
   LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceSurfaceCapabilitiesKHR);
   LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceSurfaceFormatsKHR);
   LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceSurfacePresentModesKHR);
+  LOAD_VK_FN(vulkanInstance, CreateSwapchainKHR);
+  LOAD_VK_FN(vulkanInstance, DestroySwapchainKHR);
+  LOAD_VK_FN(vulkanInstance, GetSwapchainImagesKHR);
 
   // Create debug messenger
   if(!layerMissing && !instanceExtensionMissing) {
@@ -430,6 +439,106 @@ int init() {
       SDL_Log("Present modes written: %d\n", presentModeCount);
 
       if(formatCount > 0 && presentModeCount > 0) {
+        // Set details for swapchain
+        VkSurfaceFormatKHR vulkanSurfaceFormat = {};
+        VkPresentModeKHR vulkanPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+        VkExtent2D vulkanSwapExtent = {};
+
+        // Determine surface format
+        bool foundFormat = false;
+        for(int i = 0; i < formatCount; i++) {
+          if(
+            formats[i].format == VK_FORMAT_B8G8R8_SRGB &&
+            formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
+          ) {
+            vulkanSurfaceFormat = formats[i];
+            foundFormat = true;
+          }
+        }
+        if(!foundFormat) {
+          vulkanSurfaceFormat = formats[0]; // Default to first
+        }
+
+        // Presentation mode
+        for(int i = 0; i < presentModeCount; i++) {
+          if(presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
+            vulkanPresentMode = presentModes[i];
+          }
+        }
+        
+        // Swap extent
+        if(surfaceCapabilities.currentExtent.width != UINT32_MAX) {
+          vulkanSwapExtent = surfaceCapabilities.currentExtent;
+        } else {
+          int pxWidth, pxHeight;
+          SDL_GetWindowSizeInPixels(window, &pxWidth, &pxHeight);
+          vulkanSwapExtent.width = SDL_clamp(
+              (uint32_t) pxWidth, 
+              surfaceCapabilities.minImageExtent.width,
+              surfaceCapabilities.maxImageExtent.width
+            );
+          vulkanSwapExtent.height = SDL_clamp(
+              (uint32_t) pxHeight, 
+              surfaceCapabilities.minImageExtent.height,
+              surfaceCapabilities.maxImageExtent.height
+            );
+        }
+
+        // Image count
+        if(surfaceCapabilities.maxImageCount == 0) {
+          vulkanSwapchainImageCount = surfaceCapabilities.minImageCount + 1;
+        } else {
+          vulkanSwapchainImageCount = SDL_clamp(
+              surfaceCapabilities.minImageCount + 1, 
+              0,
+              surfaceCapabilities.maxImageCount 
+            );
+        }
+
+        // Make swapchain
+        VkSwapchainCreateInfoKHR swapchainCreateInfo = {};
+        swapchainCreateInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        swapchainCreateInfo.pNext = NULL;
+        swapchainCreateInfo.flags = 0;
+        swapchainCreateInfo.surface = vulkanSurface;
+        swapchainCreateInfo.minImageCount = vulkanSwapchainImageCount;
+        swapchainCreateInfo.imageFormat = vulkanSurfaceFormat.format;
+        swapchainCreateInfo.imageColorSpace = vulkanSurfaceFormat.colorSpace;
+        swapchainCreateInfo.imageExtent = vulkanSwapExtent;
+        swapchainCreateInfo.imageArrayLayers = 1;
+        swapchainCreateInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        if(graphicsQueueIndex != presentQueueIndex) {
+          swapchainCreateInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+          swapchainCreateInfo.queueFamilyIndexCount = 2;
+          uint32_t queueFamilyIndices[] = {graphicsQueueIndex, presentQueueIndex};
+          swapchainCreateInfo.pQueueFamilyIndices = queueFamilyIndices;
+        } else {
+          swapchainCreateInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        }
+        swapchainCreateInfo.preTransform = surfaceCapabilities.currentTransform;
+        swapchainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        swapchainCreateInfo.presentMode = vulkanPresentMode;
+        swapchainCreateInfo.clipped = VK_TRUE;
+        swapchainCreateInfo.oldSwapchain = VK_NULL_HANDLE;
+
+        if(fnCreateSwapchainKHR(vulkanLogicalDevice, &swapchainCreateInfo, NULL, &vulkanSwapchain) != VK_SUCCESS) {
+          SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize swapchain.\n");
+          return -1;
+        };
+        SDL_Log("Successfully initalized swapchain.\n");
+
+        // Get images
+        if(fnGetSwapchainImagesKHR(vulkanLogicalDevice, vulkanSwapchain, &vulkanSwapchainImageCount, NULL) != VK_SUCCESS) {
+          SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to retrieve swapchain image count.\n");
+          return -1;
+        };
+        SDL_Log("Swapchain image count: %d\n", vulkanSwapchainImageCount);
+        vulkanSwapchainImages = (VkImage*) malloc(sizeof(VkImage) * vulkanSwapchainImageCount);
+        if(fnGetSwapchainImagesKHR(vulkanLogicalDevice, vulkanSwapchain, &vulkanSwapchainImageCount, vulkanSwapchainImages) != VK_SUCCESS) {
+          SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to retrieve swapchain images.\n");
+          return -1;
+        };
+
         SDL_Log("Successfully initialized Vulkan.\n");
         return 0;
       } else {
@@ -449,6 +558,7 @@ int init() {
 }
 
 void cleanupVulkan() {
+  fnDestroySwapchainKHR(vulkanLogicalDevice, vulkanSwapchain, NULL);
   fnDestroySurfaceKHR(vulkanInstance, vulkanSurface, NULL);
   fnDestroyDevice(vulkanLogicalDevice, NULL);
   fnDestroyDebugUtilsMessengerEXT(vulkanInstance, debugMessenger, NULL);
