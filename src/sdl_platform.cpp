@@ -33,7 +33,9 @@ static SDL_Window *window = NULL;
 static VkSurfaceKHR vulkanSurface = NULL;
 static VkSwapchainKHR vulkanSwapchain = NULL;
 static uint32_t vulkanSwapchainImageCount = 0;
+static VkFormat swapchainImageFormat = {};
 static VkImage* vulkanSwapchainImages = NULL;
+static VkImageView* vulkanImageViews = NULL;
 static VkInstance vulkanInstance = NULL;
 static VkDevice vulkanLogicalDevice = NULL;
 static VkQueue vulkanGraphicsQueue = NULL;
@@ -72,6 +74,8 @@ static PFN_vkGetPhysicalDeviceSurfacePresentModesKHR fnGetPhysicalDeviceSurfaceP
 static PFN_vkCreateSwapchainKHR fnCreateSwapchainKHR = NULL;
 static PFN_vkDestroySwapchainKHR fnDestroySwapchainKHR = NULL;
 static PFN_vkGetSwapchainImagesKHR fnGetSwapchainImagesKHR = NULL;
+static PFN_vkCreateImageView fnCreateImageView = NULL;
+static PFN_vkDestroyImageView fnDestroyImageView = NULL;
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -264,6 +268,7 @@ int init() {
   LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceFeatures);
   LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceQueueFamilyProperties);
   LOAD_VK_FN(vulkanInstance, CreateDevice);
+  LOAD_VK_FN(vulkanInstance, DestroyDevice);
   LOAD_VK_FN(vulkanInstance, GetDeviceQueue);
   LOAD_VK_FN(vulkanInstance, DestroySurfaceKHR);
   LOAD_VK_FN(vulkanInstance, GetPhysicalDeviceSurfaceSupportKHR);
@@ -274,6 +279,8 @@ int init() {
   LOAD_VK_FN(vulkanInstance, CreateSwapchainKHR);
   LOAD_VK_FN(vulkanInstance, DestroySwapchainKHR);
   LOAD_VK_FN(vulkanInstance, GetSwapchainImagesKHR);
+  LOAD_VK_FN(vulkanInstance, CreateImageView);
+  LOAD_VK_FN(vulkanInstance, DestroyImageView);
 
   // Create debug messenger
   if(!layerMissing && !instanceExtensionMissing) {
@@ -458,6 +465,8 @@ int init() {
         if(!foundFormat) {
           vulkanSurfaceFormat = formats[0]; // Default to first
         }
+        // Set format to be used in imageviews
+        swapchainImageFormat = vulkanSurfaceFormat.format;
 
         // Presentation mode
         for(int i = 0; i < presentModeCount; i++) {
@@ -539,6 +548,33 @@ int init() {
           return -1;
         };
 
+        // Get image views from images
+        vulkanImageViews = (VkImageView*) malloc(sizeof(VkImageView) * vulkanSwapchainImageCount);
+        for(int i = 0; i < vulkanSwapchainImageCount; i++) {
+          VkImageViewCreateInfo imageViewCreateInfo = {};
+          imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+          imageViewCreateInfo.pNext = NULL;
+          imageViewCreateInfo.flags = 0;
+          imageViewCreateInfo.image = vulkanSwapchainImages[i];
+          imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+          imageViewCreateInfo.format = swapchainImageFormat;
+          imageViewCreateInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+          imageViewCreateInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+          imageViewCreateInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+          imageViewCreateInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+          imageViewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+          imageViewCreateInfo.subresourceRange.baseMipLevel = 0;
+          imageViewCreateInfo.subresourceRange.levelCount = 1;
+          imageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
+          imageViewCreateInfo.subresourceRange.layerCount = 1;
+
+          if(fnCreateImageView(vulkanLogicalDevice, &imageViewCreateInfo, NULL, &vulkanImageViews[i]) != VK_SUCCESS) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create image view.\n");
+            return -1;
+          };
+        }
+        SDL_Log("Successfully created image views.\n");
+
         SDL_Log("Successfully initialized Vulkan.\n");
         return 0;
       } else {
@@ -558,6 +594,9 @@ int init() {
 }
 
 void cleanupVulkan() {
+  for(int i = 0; i < vulkanSwapchainImageCount; i++) {
+    fnDestroyImageView(vulkanLogicalDevice, vulkanImageViews[i], NULL);
+  }
   fnDestroySwapchainKHR(vulkanLogicalDevice, vulkanSwapchain, NULL);
   fnDestroySurfaceKHR(vulkanInstance, vulkanSurface, NULL);
   fnDestroyDevice(vulkanLogicalDevice, NULL);
@@ -580,7 +619,7 @@ int main(int argc, char *argv[]) {
 
   SDL_Event event;
 
-  running = true;
+  running = false;
   while(running) {
     // Handle events
     while(SDL_PollEvent(&event)) {
