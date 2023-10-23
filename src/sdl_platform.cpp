@@ -9,7 +9,8 @@
 
 #include <stdlib.h>
 #include <malloc.h>
-#include <string.h>
+#include <cstring>
+#include <string>
 #include <set>
 
 // Constants
@@ -29,6 +30,7 @@ static const int deviceExtensionCount = 1;
 
 // Globals
 static bool running = false;
+static std::string basePath = "";
 static SDL_Window *window = NULL;
 static VkSurfaceKHR vulkanSurface = NULL;
 static VkSwapchainKHR vulkanSwapchain = NULL;
@@ -36,6 +38,9 @@ static uint32_t vulkanSwapchainImageCount = 0;
 static VkFormat swapchainImageFormat = {};
 static VkImage* vulkanSwapchainImages = NULL;
 static VkImageView* vulkanImageViews = NULL;
+static VkShaderModule vertModule = NULL;
+static VkShaderModule fragModule = NULL;
+static VkPipelineLayout vulkanPipelineLayout = NULL;
 static VkInstance vulkanInstance = NULL;
 static VkDevice vulkanLogicalDevice = NULL;
 static VkQueue vulkanGraphicsQueue = NULL;
@@ -76,6 +81,10 @@ static PFN_vkDestroySwapchainKHR fnDestroySwapchainKHR = NULL;
 static PFN_vkGetSwapchainImagesKHR fnGetSwapchainImagesKHR = NULL;
 static PFN_vkCreateImageView fnCreateImageView = NULL;
 static PFN_vkDestroyImageView fnDestroyImageView = NULL;
+static PFN_vkCreateShaderModule fnCreateShaderModule = NULL;
+static PFN_vkDestroyShaderModule fnDestroyShaderModule = NULL;
+static PFN_vkCreatePipelineLayout fnCreatePipelineLayout = NULL;
+static PFN_vkDestroyPipelineLayout fnDestroyPipelineLayout = NULL;
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -87,12 +96,28 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   return VK_FALSE;
 }
 
+VkShaderModule createShaderModule(uint32_t* code, size_t size) {
+  VkShaderModuleCreateInfo ci = {};
+  ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  ci.codeSize = size;
+  ci.pCode = code;
+  VkShaderModule out;
+  if(fnCreateShaderModule(vulkanLogicalDevice, &ci, NULL, &out) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create shader module\n");
+    return NULL;
+  }
+  return out;
+}
+
 int init() {
   // Init SDL
   if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize SDL. Error: %s\n", SDL_GetError());
     return -1;
   }
+
+  basePath = std::string(SDL_GetBasePath());
+  SDL_Log("Base path: %s\n", basePath.c_str());
 
   // Load vulkan driver
   SDL_Vulkan_LoadLibrary(NULL);
@@ -105,7 +130,7 @@ int init() {
     SDL_WINDOW_VULKAN
   );
 
-  if(window == NULL) {
+  if(window == NULL) { 
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize window. Error: %s\n", SDL_GetError());
     return -1;
   }
@@ -227,37 +252,37 @@ int init() {
     }
   }
     
-  VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo = {};
+  VkDebugUtilsMessengerCreateInfoEXT dci = {};
     
   // This is linked to the instance createInfo to enable debug for the instance creation
-  debugCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-  debugCreateInfo.messageSeverity = // All messages
+  dci.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+  dci.messageSeverity = // All messages
     VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT |
     VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
     VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
     VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT;
-  debugCreateInfo.messageType = 
+  dci.messageType = 
     VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
     VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
     VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-  debugCreateInfo.pfnUserCallback = debugCallback;
+  dci.pfnUserCallback = debugCallback;
 
-  VkInstanceCreateInfo instanceCreateInfo = {};
-  instanceCreateInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-  instanceCreateInfo.pApplicationInfo = &appInfo;
-  instanceCreateInfo.enabledExtensionCount = (instanceExtensionCount + sdlNeededExtensionCount);
-  instanceCreateInfo.ppEnabledExtensionNames = requestedExtensions;
+  VkInstanceCreateInfo ici = {};
+  ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+  ici.pApplicationInfo = &appInfo;
+  ici.enabledExtensionCount = (instanceExtensionCount + sdlNeededExtensionCount);
+  ici.ppEnabledExtensionNames = requestedExtensions;
   if(!layerMissing && !instanceExtensionMissing) {
-    instanceCreateInfo.enabledLayerCount = layerCount;
-    instanceCreateInfo.ppEnabledLayerNames = layers;
-    instanceCreateInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*) &debugCreateInfo;
+    ici.enabledLayerCount = layerCount;
+    ici.ppEnabledLayerNames = layers;
+    ici.pNext = (VkDebugUtilsMessengerCreateInfoEXT*) &dci;
   } else {
     SDL_Log("Missing validation layer or extension, skipping debug\n");
-    instanceCreateInfo.enabledLayerCount = 0;
-    instanceCreateInfo.ppEnabledLayerNames = NULL;
+    ici.enabledLayerCount = 0;
+    ici.ppEnabledLayerNames = NULL;
   }
 
-  if(fnCreateInstance(&instanceCreateInfo, nullptr, &vulkanInstance) != VK_SUCCESS) {
+  if(fnCreateInstance(&ici, nullptr, &vulkanInstance) != VK_SUCCESS) {
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make vulkan instance\n");
   };
 
@@ -281,12 +306,16 @@ int init() {
   LOAD_VK_FN(vulkanInstance, GetSwapchainImagesKHR);
   LOAD_VK_FN(vulkanInstance, CreateImageView);
   LOAD_VK_FN(vulkanInstance, DestroyImageView);
+  LOAD_VK_FN(vulkanInstance, CreateShaderModule);
+  LOAD_VK_FN(vulkanInstance, DestroyShaderModule);
+  LOAD_VK_FN(vulkanInstance, CreatePipelineLayout);
+  LOAD_VK_FN(vulkanInstance, DestroyPipelineLayout);
 
   // Create debug messenger
   if(!layerMissing && !instanceExtensionMissing) {
     LOAD_VK_FN(vulkanInstance, CreateDebugUtilsMessengerEXT);
     LOAD_VK_FN(vulkanInstance, DestroyDebugUtilsMessengerEXT);
-    if(fnCreateDebugUtilsMessengerEXT(vulkanInstance, &debugCreateInfo, NULL, &debugMessenger) != VK_SUCCESS) {
+    if(fnCreateDebugUtilsMessengerEXT(vulkanInstance, &dci, NULL, &debugMessenger) != VK_SUCCESS) {
       SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make debug messenger\n");
     }
   }
@@ -392,29 +421,29 @@ int init() {
 
       // Create logical device from physical queue
       std::set<uint32_t> uniqueQueueFamilyIndex = {graphicsQueueIndex, presentQueueIndex};
-      VkDeviceQueueCreateInfo* queueCreateInfos = (VkDeviceQueueCreateInfo*) malloc(sizeof(VkDeviceQueueCreateInfo) * uniqueQueueFamilyIndex.size());
+      VkDeviceQueueCreateInfo* qci = (VkDeviceQueueCreateInfo*) malloc(sizeof(VkDeviceQueueCreateInfo) * uniqueQueueFamilyIndex.size());
       const float priorities[1] = { 1.0f };
 
       int i = 0;
       for(uint32_t queueFamilyIndex : uniqueQueueFamilyIndex) {
-        queueCreateInfos[i].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        queueCreateInfos[i].queueFamilyIndex = queueFamilyIndex;
-        queueCreateInfos[i].queueCount = 1;
-        queueCreateInfos[i].pQueuePriorities = priorities;
-        queueCreateInfos[i].pNext = NULL;
+        qci[i].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        qci[i].queueFamilyIndex = queueFamilyIndex;
+        qci[i].queueCount = 1;
+        qci[i].pQueuePriorities = priorities;
+        qci[i].pNext = NULL;
         i++;
       }
       
-      VkDeviceCreateInfo logicalDeviceCreateInfo = {};
-      logicalDeviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-      logicalDeviceCreateInfo.queueCreateInfoCount = uniqueQueueFamilyIndex.size();
-      logicalDeviceCreateInfo.pQueueCreateInfos = queueCreateInfos;
-      logicalDeviceCreateInfo.enabledExtensionCount = deviceExtensionCount;
-      logicalDeviceCreateInfo.ppEnabledExtensionNames = deviceExtensions;
-      logicalDeviceCreateInfo.pEnabledFeatures = NULL; // Enable features here if needed later
-      logicalDeviceCreateInfo.pNext = NULL;
+      VkDeviceCreateInfo ldci = {};
+      ldci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+      ldci.queueCreateInfoCount = uniqueQueueFamilyIndex.size();
+      ldci.pQueueCreateInfos = qci;
+      ldci.enabledExtensionCount = deviceExtensionCount;
+      ldci.ppEnabledExtensionNames = deviceExtensions;
+      ldci.pEnabledFeatures = NULL; // Enable features here if needed later
+      ldci.pNext = NULL;
 
-      if((res = fnCreateDevice(vulkanPhysicalDevice, &logicalDeviceCreateInfo, NULL, &vulkanLogicalDevice)) != VK_SUCCESS) {
+      if((res = fnCreateDevice(vulkanPhysicalDevice, &ldci, NULL, &vulkanLogicalDevice)) != VK_SUCCESS) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize logical device: %d\n", res);
       }
 
@@ -505,32 +534,32 @@ int init() {
         }
 
         // Make swapchain
-        VkSwapchainCreateInfoKHR swapchainCreateInfo = {};
-        swapchainCreateInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-        swapchainCreateInfo.pNext = NULL;
-        swapchainCreateInfo.flags = 0;
-        swapchainCreateInfo.surface = vulkanSurface;
-        swapchainCreateInfo.minImageCount = vulkanSwapchainImageCount;
-        swapchainCreateInfo.imageFormat = vulkanSurfaceFormat.format;
-        swapchainCreateInfo.imageColorSpace = vulkanSurfaceFormat.colorSpace;
-        swapchainCreateInfo.imageExtent = vulkanSwapExtent;
-        swapchainCreateInfo.imageArrayLayers = 1;
-        swapchainCreateInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        VkSwapchainCreateInfoKHR scci = {};
+        scci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        scci.pNext = NULL;
+        scci.flags = 0;
+        scci.surface = vulkanSurface;
+        scci.minImageCount = vulkanSwapchainImageCount;
+        scci.imageFormat = vulkanSurfaceFormat.format;
+        scci.imageColorSpace = vulkanSurfaceFormat.colorSpace;
+        scci.imageExtent = vulkanSwapExtent;
+        scci.imageArrayLayers = 1;
+        scci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         if(graphicsQueueIndex != presentQueueIndex) {
-          swapchainCreateInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-          swapchainCreateInfo.queueFamilyIndexCount = 2;
+          scci.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+          scci.queueFamilyIndexCount = 2;
           uint32_t queueFamilyIndices[] = {graphicsQueueIndex, presentQueueIndex};
-          swapchainCreateInfo.pQueueFamilyIndices = queueFamilyIndices;
+          scci.pQueueFamilyIndices = queueFamilyIndices;
         } else {
-          swapchainCreateInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+          scci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
         }
-        swapchainCreateInfo.preTransform = surfaceCapabilities.currentTransform;
-        swapchainCreateInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-        swapchainCreateInfo.presentMode = vulkanPresentMode;
-        swapchainCreateInfo.clipped = VK_TRUE;
-        swapchainCreateInfo.oldSwapchain = VK_NULL_HANDLE;
+        scci.preTransform = surfaceCapabilities.currentTransform;
+        scci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        scci.presentMode = vulkanPresentMode;
+        scci.clipped = VK_TRUE;
+        scci.oldSwapchain = VK_NULL_HANDLE;
 
-        if(fnCreateSwapchainKHR(vulkanLogicalDevice, &swapchainCreateInfo, NULL, &vulkanSwapchain) != VK_SUCCESS) {
+        if(fnCreateSwapchainKHR(vulkanLogicalDevice, &scci, NULL, &vulkanSwapchain) != VK_SUCCESS) {
           SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize swapchain.\n");
           return -1;
         };
@@ -551,32 +580,154 @@ int init() {
         // Get image views from images
         vulkanImageViews = (VkImageView*) malloc(sizeof(VkImageView) * vulkanSwapchainImageCount);
         for(int i = 0; i < vulkanSwapchainImageCount; i++) {
-          VkImageViewCreateInfo imageViewCreateInfo = {};
-          imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-          imageViewCreateInfo.pNext = NULL;
-          imageViewCreateInfo.flags = 0;
-          imageViewCreateInfo.image = vulkanSwapchainImages[i];
-          imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-          imageViewCreateInfo.format = swapchainImageFormat;
-          imageViewCreateInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-          imageViewCreateInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-          imageViewCreateInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-          imageViewCreateInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-          imageViewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-          imageViewCreateInfo.subresourceRange.baseMipLevel = 0;
-          imageViewCreateInfo.subresourceRange.levelCount = 1;
-          imageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
-          imageViewCreateInfo.subresourceRange.layerCount = 1;
+          VkImageViewCreateInfo ivci = {};
+          ivci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+          ivci.pNext = NULL;
+          ivci.flags = 0;
+          ivci.image = vulkanSwapchainImages[i];
+          ivci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+          ivci.format = swapchainImageFormat;
+          ivci.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+          ivci.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+          ivci.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+          ivci.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+          ivci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+          ivci.subresourceRange.baseMipLevel = 0;
+          ivci.subresourceRange.levelCount = 1;
+          ivci.subresourceRange.baseArrayLayer = 0;
+          ivci.subresourceRange.layerCount = 1;
 
-          if(fnCreateImageView(vulkanLogicalDevice, &imageViewCreateInfo, NULL, &vulkanImageViews[i]) != VK_SUCCESS) {
+          if(fnCreateImageView(vulkanLogicalDevice, &ivci, NULL, &vulkanImageViews[i]) != VK_SUCCESS) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create image view.\n");
             return -1;
           };
         }
         SDL_Log("Successfully created image views.\n");
 
-        SDL_Log("Successfully initialized Vulkan.\n");
-        return 0;
+        // Create the graphics pipeline
+        // Load shaders
+        size_t fragSize, vertSize; 
+        uint32_t* shaderFrag = (uint32_t*) SDL_LoadFile((basePath + "/frag.spv").c_str(), &fragSize);
+        uint32_t* shaderVert = (uint32_t*) SDL_LoadFile((basePath + "/vert.spv").c_str(), &vertSize);
+
+        SDL_Log("Frag size: %zu\n", fragSize);
+        SDL_Log("Vert size: %zu\n", vertSize);
+
+        fragModule = createShaderModule(shaderFrag, fragSize);
+        vertModule = createShaderModule(shaderVert, vertSize);
+
+        SDL_free(shaderFrag); 
+        SDL_free(shaderVert); 
+
+        if(fragModule != NULL && vertModule != NULL) {
+          SDL_Log("Successfully initialized shaders.\n");
+          // Pipeline
+          VkPipelineShaderStageCreateInfo pssciV = {};
+          pssciV.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+          pssciV.pNext = NULL;
+          pssciV.flags = 0;
+          pssciV.stage = VK_SHADER_STAGE_VERTEX_BIT;
+          pssciV.module = vertModule;
+          pssciV.pName = "main";
+          pssciV.pSpecializationInfo = NULL;
+
+          VkPipelineShaderStageCreateInfo pssciF = {};
+          pssciF.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+          pssciF.pNext = NULL;
+          pssciF.flags = 0;
+          pssciF.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+          pssciF.module = fragModule;
+          pssciF.pName = "main";
+          pssciF.pSpecializationInfo = NULL;
+
+          // Create generic pipeline (consider pulling this whole process out)
+          // Dynamic states
+          VkDynamicState dynamicStates[2] = { 
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_SCISSOR
+          }; // Hardcoded for now 
+          VkPipelineDynamicStateCreateInfo pdsci = {};
+          pdsci.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+          pdsci.pNext = NULL;
+          pdsci.flags = 0;
+          pdsci.dynamicStateCount = 2;
+          pdsci.pDynamicStates = dynamicStates;
+
+          VkPipelineVertexInputStateCreateInfo pvisci = {};
+          pvisci.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+          pvisci.pNext = NULL;
+          pvisci.flags = 0;
+          pvisci.vertexAttributeDescriptionCount = 0;
+          pvisci.pVertexAttributeDescriptions = NULL;
+          pvisci.vertexBindingDescriptionCount = 0;
+          pvisci.pVertexBindingDescriptions = NULL;
+
+          VkPipelineInputAssemblyStateCreateInfo piasci = {};
+          piasci.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+          piasci.pNext = NULL;
+          piasci.flags = 0;
+          piasci.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+          piasci.primitiveRestartEnable = VK_FALSE;
+
+          VkPipelineViewportStateCreateInfo pvsci = {};
+          pvsci.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+          pvsci.pNext = NULL;
+          pvsci.flags = 0;
+          pvsci.viewportCount = 1;
+          pvsci.scissorCount = 1;
+
+          VkPipelineRasterizationStateCreateInfo prsci = {};
+          prsci.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+          prsci.pNext = NULL;
+          prsci.flags = 0;
+          prsci.depthClampEnable = VK_FALSE;
+          prsci.rasterizerDiscardEnable = VK_FALSE;
+          prsci.polygonMode = VK_POLYGON_MODE_FILL;
+          prsci.lineWidth = 1.0f;
+          prsci.cullMode = VK_CULL_MODE_BACK_BIT;
+          prsci.frontFace = VK_FRONT_FACE_CLOCKWISE;
+          prsci.depthBiasEnable = VK_FALSE;
+
+          VkPipelineMultisampleStateCreateInfo pmsci = {};
+          pmsci.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+          pmsci.pNext = NULL;
+          pmsci.flags = 0;
+          pmsci.sampleShadingEnable = VK_FALSE; // disabled for now
+          pmsci.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+          VkPipelineColorBlendAttachmentState pcbas = {};
+          pcbas.colorWriteMask = 
+            VK_COLOR_COMPONENT_R_BIT |
+            VK_COLOR_COMPONENT_G_BIT |
+            VK_COLOR_COMPONENT_B_BIT |
+            VK_COLOR_COMPONENT_A_BIT;
+          pcbas.blendEnable = VK_FALSE;
+          VkPipelineColorBlendStateCreateInfo pcbsci = {};
+          pcbsci.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+          pcbsci.pNext = NULL;
+          pcbsci.flags = 0;
+          pcbsci.logicOpEnable = VK_FALSE;
+          pcbsci.attachmentCount = 1;
+          pcbsci.pAttachments = &pcbas; // We only have 1 so the address will suffice 
+
+          VkPipelineLayoutCreateInfo plci = {};
+          plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+          plci.pNext = NULL;
+          plci.flags = 0;
+
+          if(fnCreatePipelineLayout(vulkanLogicalDevice, &plci, NULL, &vulkanPipelineLayout) != VK_SUCCESS) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make pipeline layout.\n");
+            return -1;
+          }
+
+          SDL_Log("Successfully initialized pipeline layout.\n");
+
+          SDL_Log("Successfully initialized Vulkan.\n");
+          return 0;
+        } else {
+          SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize shaders.\n");
+          return -1;
+        }
       } else {
         SDL_Log("Format and present mode are needed, skipping...\n");
       }
@@ -594,6 +745,9 @@ int init() {
 }
 
 void cleanupVulkan() {
+  fnDestroyPipelineLayout(vulkanLogicalDevice, vulkanPipelineLayout, NULL);
+  fnDestroyShaderModule(vulkanLogicalDevice, vertModule, NULL);
+  fnDestroyShaderModule(vulkanLogicalDevice, fragModule, NULL);
   for(int i = 0; i < vulkanSwapchainImageCount; i++) {
     fnDestroyImageView(vulkanLogicalDevice, vulkanImageViews[i], NULL);
   }
