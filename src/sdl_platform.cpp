@@ -40,6 +40,7 @@ static VkImage* vulkanSwapchainImages = NULL;
 static VkImageView* vulkanImageViews = NULL;
 static VkShaderModule vertModule = NULL;
 static VkShaderModule fragModule = NULL;
+static VkRenderPass vulkanRenderPass = NULL;
 static VkPipelineLayout vulkanPipelineLayout = NULL;
 static VkInstance vulkanInstance = NULL;
 static VkDevice vulkanLogicalDevice = NULL;
@@ -85,6 +86,8 @@ static PFN_vkCreateShaderModule fnCreateShaderModule = NULL;
 static PFN_vkDestroyShaderModule fnDestroyShaderModule = NULL;
 static PFN_vkCreatePipelineLayout fnCreatePipelineLayout = NULL;
 static PFN_vkDestroyPipelineLayout fnDestroyPipelineLayout = NULL;
+static PFN_vkCreateRenderPass fnCreateRenderPass = NULL;
+static PFN_vkDestroyRenderPass fnDestroyRenderPass = NULL;
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -310,6 +313,8 @@ int init() {
   LOAD_VK_FN(vulkanInstance, DestroyShaderModule);
   LOAD_VK_FN(vulkanInstance, CreatePipelineLayout);
   LOAD_VK_FN(vulkanInstance, DestroyPipelineLayout);
+  LOAD_VK_FN(vulkanInstance, CreateRenderPass);
+  LOAD_VK_FN(vulkanInstance, DestroyRenderPass);
 
   // Create debug messenger
   if(!layerMissing && !instanceExtensionMissing) {
@@ -722,6 +727,44 @@ int init() {
 
           SDL_Log("Successfully initialized pipeline layout.\n");
 
+          // Render pass
+          VkAttachmentDescription colorAttachment = {};
+          colorAttachment.flags = 0;
+          colorAttachment.format = swapchainImageFormat;
+          colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+          colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+          colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+          colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+          colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+          colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+          colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+          VkAttachmentReference colorAttachmentRef = {};
+          colorAttachmentRef.attachment = 0;
+          colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+          VkSubpassDescription subpass = {};
+          subpass.flags = 0;
+          subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+          subpass.colorAttachmentCount = 1;
+          subpass.pColorAttachments = &colorAttachmentRef;
+
+          VkRenderPassCreateInfo rpci = {};
+          rpci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+          rpci.pNext = NULL;
+          rpci.flags = 0;
+          rpci.attachmentCount = 1;
+          rpci.pAttachments = &colorAttachment;
+          rpci.subpassCount = 1;
+          rpci.pSubpasses = &subpass;
+
+          if(fnCreateRenderPass(vulkanLogicalDevice, &rpci, NULL, &vulkanRenderPass) != VK_SUCCESS) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make render pass.\n");
+            return -1;
+          }
+
+          SDL_Log("Successfully initialized render pass.\n");
+ 
           SDL_Log("Successfully initialized Vulkan.\n");
           return 0;
         } else {
@@ -745,6 +788,7 @@ int init() {
 }
 
 void cleanupVulkan() {
+  fnDestroyRenderPass(vulkanLogicalDevice, vulkanRenderPass, NULL);
   fnDestroyPipelineLayout(vulkanLogicalDevice, vulkanPipelineLayout, NULL);
   fnDestroyShaderModule(vulkanLogicalDevice, vertModule, NULL);
   fnDestroyShaderModule(vulkanLogicalDevice, fragModule, NULL);
