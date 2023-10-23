@@ -42,6 +42,7 @@ static VkShaderModule vertModule = NULL;
 static VkShaderModule fragModule = NULL;
 static VkRenderPass vulkanRenderPass = NULL;
 static VkPipelineLayout vulkanPipelineLayout = NULL;
+static VkPipeline vulkanGraphicsPipeline = NULL;
 static VkInstance vulkanInstance = NULL;
 static VkDevice vulkanLogicalDevice = NULL;
 static VkQueue vulkanGraphicsQueue = NULL;
@@ -88,6 +89,8 @@ static PFN_vkCreatePipelineLayout fnCreatePipelineLayout = NULL;
 static PFN_vkDestroyPipelineLayout fnDestroyPipelineLayout = NULL;
 static PFN_vkCreateRenderPass fnCreateRenderPass = NULL;
 static PFN_vkDestroyRenderPass fnDestroyRenderPass = NULL;
+static PFN_vkCreateGraphicsPipelines fnCreateGraphicsPipelines = NULL;
+static PFN_vkDestroyPipeline fnDestroyPipeline = NULL;
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -315,6 +318,8 @@ int init() {
   LOAD_VK_FN(vulkanInstance, DestroyPipelineLayout);
   LOAD_VK_FN(vulkanInstance, CreateRenderPass);
   LOAD_VK_FN(vulkanInstance, DestroyRenderPass);
+  LOAD_VK_FN(vulkanInstance, CreateGraphicsPipelines);
+  LOAD_VK_FN(vulkanInstance, DestroyPipeline);
 
   // Create debug messenger
   if(!layerMissing && !instanceExtensionMissing) {
@@ -626,24 +631,23 @@ int init() {
 
         if(fragModule != NULL && vertModule != NULL) {
           SDL_Log("Successfully initialized shaders.\n");
-          // Pipeline
-          VkPipelineShaderStageCreateInfo pssciV = {};
-          pssciV.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-          pssciV.pNext = NULL;
-          pssciV.flags = 0;
-          pssciV.stage = VK_SHADER_STAGE_VERTEX_BIT;
-          pssciV.module = vertModule;
-          pssciV.pName = "main";
-          pssciV.pSpecializationInfo = NULL;
+          // Shader stages
+          VkPipelineShaderStageCreateInfo pssci[2] = {};
+          pssci[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+          pssci[0].pNext = NULL;
+          pssci[0].flags = 0;
+          pssci[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+          pssci[0].module = vertModule;
+          pssci[0].pName = "main";
+          pssci[0].pSpecializationInfo = NULL;
 
-          VkPipelineShaderStageCreateInfo pssciF = {};
-          pssciF.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-          pssciF.pNext = NULL;
-          pssciF.flags = 0;
-          pssciF.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-          pssciF.module = fragModule;
-          pssciF.pName = "main";
-          pssciF.pSpecializationInfo = NULL;
+          pssci[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+          pssci[1].pNext = NULL;
+          pssci[1].flags = 0;
+          pssci[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+          pssci[1].module = fragModule;
+          pssci[1].pName = "main";
+          pssci[1].pSpecializationInfo = NULL;
 
           // Create generic pipeline (consider pulling this whole process out)
           // Dynamic states
@@ -764,7 +768,32 @@ int init() {
           }
 
           SDL_Log("Successfully initialized render pass.\n");
- 
+
+          // Finally we can make the pipeline
+          VkGraphicsPipelineCreateInfo gpci = {};
+          gpci.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+          gpci.pNext = NULL;
+          gpci.flags = 0;
+          gpci.stageCount = 2;
+          gpci.pStages = pssci;
+          gpci.pVertexInputState = &pvisci;
+          gpci.pInputAssemblyState = &piasci;
+          gpci.pViewportState = &pvsci;
+          gpci.pRasterizationState = &prsci;
+          gpci.pMultisampleState = &pmsci;
+          gpci.pColorBlendState = &pcbsci;
+          gpci.pDynamicState = &pdsci;
+          gpci.layout = vulkanPipelineLayout;
+          gpci.renderPass = vulkanRenderPass;
+          gpci.subpass = 0;
+
+          if(fnCreateGraphicsPipelines(vulkanLogicalDevice, NULL, 1, &gpci, NULL, &vulkanGraphicsPipeline) != VK_SUCCESS) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make graphics pipeline.\n");
+            return -1;
+          }
+
+          SDL_Log("Successfully initialized graphics pipeline.\n");
+
           SDL_Log("Successfully initialized Vulkan.\n");
           return 0;
         } else {
@@ -788,6 +817,7 @@ int init() {
 }
 
 void cleanupVulkan() {
+  fnDestroyPipeline(vulkanLogicalDevice, vulkanGraphicsPipeline, NULL);
   fnDestroyRenderPass(vulkanLogicalDevice, vulkanRenderPass, NULL);
   fnDestroyPipelineLayout(vulkanLogicalDevice, vulkanPipelineLayout, NULL);
   fnDestroyShaderModule(vulkanLogicalDevice, vertModule, NULL);
