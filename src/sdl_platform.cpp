@@ -36,6 +36,7 @@ static VkSurfaceKHR vulkanSurface = NULL;
 static VkSwapchainKHR vulkanSwapchain = NULL;
 static uint32_t vulkanSwapchainImageCount = 0;
 static VkFormat swapchainImageFormat = {};
+static VkExtent2D vulkanSwapExtent = {};
 static VkImage* vulkanSwapchainImages = NULL;
 static VkImageView* vulkanImageViews = NULL;
 static VkShaderModule vertModule = NULL;
@@ -45,6 +46,7 @@ static VkPipelineLayout vulkanPipelineLayout = NULL;
 static VkPipeline vulkanGraphicsPipeline = NULL;
 static VkFramebuffer* vulkanFramebuffers = NULL;
 static VkCommandPool vulkanCommandPool = NULL;
+static VkCommandBuffer vulkanCommandBuffer = NULL;
 static VkInstance vulkanInstance = NULL;
 static VkDevice vulkanLogicalDevice = NULL;
 static VkQueue vulkanGraphicsQueue = NULL;
@@ -97,7 +99,15 @@ static PFN_vkCreateFramebuffer fnCreateFramebuffer = NULL;
 static PFN_vkDestroyFramebuffer fnDestroyFramebuffer = NULL;
 static PFN_vkCreateCommandPool fnCreateCommandPool = NULL;
 static PFN_vkDestroyCommandPool fnDestroyCommandPool = NULL;
-
+static PFN_vkAllocateCommandBuffers fnAllocateCommandBuffers = NULL;
+static PFN_vkBeginCommandBuffer fnBeginCommandBuffer = NULL;
+static PFN_vkCmdBeginRenderPass fnCmdBeginRenderPass = NULL;
+static PFN_vkCmdBindPipeline fnCmdBindPipeline = NULL;
+static PFN_vkCmdSetViewport fnCmdSetViewport = NULL;
+static PFN_vkCmdSetScissor fnCmdSetScissor = NULL;
+static PFN_vkCmdDraw fnCmdDraw = NULL;
+static PFN_vkCmdEndRenderPass fnCmdEndRenderPass = NULL;
+static PFN_vkEndCommandBuffer fnEndCommandBuffer = NULL;
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -331,6 +341,15 @@ int init() {
   LOAD_VK_FN(vulkanInstance, DestroyFramebuffer);
   LOAD_VK_FN(vulkanInstance, CreateCommandPool);
   LOAD_VK_FN(vulkanInstance, DestroyCommandPool);
+  LOAD_VK_FN(vulkanInstance, AllocateCommandBuffers);
+  LOAD_VK_FN(vulkanInstance, BeginCommandBuffer);
+  LOAD_VK_FN(vulkanInstance, CmdBeginRenderPass);
+  LOAD_VK_FN(vulkanInstance, CmdBindPipeline);
+  LOAD_VK_FN(vulkanInstance, CmdSetViewport);
+  LOAD_VK_FN(vulkanInstance, CmdSetScissor);
+  LOAD_VK_FN(vulkanInstance, CmdDraw);
+  LOAD_VK_FN(vulkanInstance, CmdEndRenderPass);
+  LOAD_VK_FN(vulkanInstance, EndCommandBuffer);
 
   // Create debug messenger
   if(!layerMissing && !instanceExtensionMissing) {
@@ -499,7 +518,6 @@ int init() {
         // Set details for swapchain
         VkSurfaceFormatKHR vulkanSurfaceFormat = {};
         VkPresentModeKHR vulkanPresentMode = VK_PRESENT_MODE_FIFO_KHR;
-        VkExtent2D vulkanSwapExtent = {};
 
         // Determine surface format
         bool foundFormat = false;
@@ -840,7 +858,22 @@ int init() {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make command pool.\n");
             return -1;
           }
+          SDL_Log("Successfully initialized command pool.\n");
 
+          // Command buffer
+          VkCommandBufferAllocateInfo cbai = {};
+          cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+          cbai.pNext = NULL;
+          cbai.commandPool = vulkanCommandPool;
+          cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+          cbai.commandBufferCount = 1;
+
+            if(fnAllocateCommandBuffers(vulkanLogicalDevice, &cbai, &vulkanCommandBuffer) != VK_SUCCESS) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make command buffer.\n");
+            return -1;
+          }
+
+          SDL_Log("Successfully initialized command buffer.\n");
           SDL_Log("Successfully initialized Vulkan.\n");
           return 0;
         } else {
@@ -861,6 +894,57 @@ int init() {
   }
 
   return -1;
+}
+
+int recordCommandBuffer(uint32_t index) {
+  VkCommandBufferBeginInfo cbbi = {};
+  cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  cbbi.pNext = NULL;
+  cbbi.flags = 0;
+  if(fnBeginCommandBuffer(vulkanCommandBuffer, &cbbi) != VK_SUCCESS) {
+    SDL_Log("Failed to begin buffer\n");
+    return -1;
+  }
+  VkRenderPassBeginInfo rpbi = {};
+  rpbi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+  rpbi.pNext = NULL;
+  rpbi.renderPass = vulkanRenderPass;
+  rpbi.framebuffer = vulkanFramebuffers[index];
+  rpbi.renderArea.offset = {0, 0};
+  rpbi.renderArea.extent = vulkanSwapExtent;
+  rpbi.clearValueCount = 1;
+  VkClearValue clearColor = {0.0f, 0.0f, 0.0f, 1.0f};
+  rpbi.pClearValues = &clearColor;
+
+  fnCmdBeginRenderPass(vulkanCommandBuffer, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+  fnCmdBindPipeline(vulkanCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vulkanGraphicsPipeline);
+
+  VkViewport viewport = {};
+  viewport.x = 0.0f;
+  viewport.y = 0.0f;
+  viewport.width = (float) vulkanSwapExtent.width;
+  viewport.height - (float) vulkanSwapExtent.height;
+  viewport.minDepth = 0.0f;
+  viewport.maxDepth = 1.0f;
+  fnCmdSetViewport(vulkanCommandBuffer, 0, 1, &viewport);
+
+  VkRect2D scissor = {};
+  scissor.offset = {0, 0};
+  scissor.extent = vulkanSwapExtent;
+  fnCmdSetScissor(vulkanCommandBuffer, 0, 1, &scissor);
+  fnCmdDraw(vulkanCommandBuffer, 3, 1, 0, 0);
+
+  fnCmdEndRenderPass(vulkanCommandBuffer);
+  if(fnEndCommandBuffer(vulkanCommandBuffer) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to write to buffer.\n");
+    return -1;
+  }
+  return 0;
+}
+
+int drawFrame() {
+
+  return 0;
 }
 
 void cleanupVulkan() {
@@ -900,6 +984,7 @@ int main(int argc, char *argv[]) {
   SDL_Event event;
 
   running = false;
+  recordCommandBuffer(0);
   while(running) {
     // Handle events
     while(SDL_PollEvent(&event)) {
