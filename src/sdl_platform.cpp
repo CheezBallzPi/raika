@@ -43,6 +43,7 @@ static VkShaderModule fragModule = NULL;
 static VkRenderPass vulkanRenderPass = NULL;
 static VkPipelineLayout vulkanPipelineLayout = NULL;
 static VkPipeline vulkanGraphicsPipeline = NULL;
+static VkFramebuffer* vulkanFramebuffers = NULL;
 static VkInstance vulkanInstance = NULL;
 static VkDevice vulkanLogicalDevice = NULL;
 static VkQueue vulkanGraphicsQueue = NULL;
@@ -91,6 +92,8 @@ static PFN_vkCreateRenderPass fnCreateRenderPass = NULL;
 static PFN_vkDestroyRenderPass fnDestroyRenderPass = NULL;
 static PFN_vkCreateGraphicsPipelines fnCreateGraphicsPipelines = NULL;
 static PFN_vkDestroyPipeline fnDestroyPipeline = NULL;
+static PFN_vkCreateFramebuffer fnCreateFramebuffer = NULL;
+static PFN_vkDestroyFramebuffer fnDestroyFramebuffer = NULL;
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -320,6 +323,8 @@ int init() {
   LOAD_VK_FN(vulkanInstance, DestroyRenderPass);
   LOAD_VK_FN(vulkanInstance, CreateGraphicsPipelines);
   LOAD_VK_FN(vulkanInstance, DestroyPipeline);
+  LOAD_VK_FN(vulkanInstance, CreateFramebuffer);
+  LOAD_VK_FN(vulkanInstance, DestroyFramebuffer);
 
   // Create debug messenger
   if(!layerMissing && !instanceExtensionMissing) {
@@ -794,6 +799,31 @@ int init() {
 
           SDL_Log("Successfully initialized graphics pipeline.\n");
 
+          // Framebuffer
+          vulkanFramebuffers = (VkFramebuffer*) malloc(sizeof(VkFramebuffer) * vulkanSwapchainImageCount);
+          for(int i = 0; i < vulkanSwapchainImageCount; i++) {
+            VkImageView attachments[1] = {
+              vulkanImageViews[i]
+            };
+
+            VkFramebufferCreateInfo fci = {};
+            fci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            fci.pNext = NULL;
+            fci.flags = 0;
+            fci.renderPass = vulkanRenderPass;
+            fci.attachmentCount = 1;
+            fci.pAttachments = attachments;
+            fci.width = vulkanSwapExtent.width;
+            fci.height = vulkanSwapExtent.height;
+            fci.layers = 1;
+
+            if(fnCreateFramebuffer(vulkanLogicalDevice, &fci, NULL, &(vulkanFramebuffers[i])) != VK_SUCCESS) {
+              SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make framebuffer.\n");
+              return -1;
+            }
+          }
+          SDL_Log("Successfully initialized framebuffer\n");
+
           SDL_Log("Successfully initialized Vulkan.\n");
           return 0;
         } else {
@@ -817,6 +847,10 @@ int init() {
 }
 
 void cleanupVulkan() {
+  for(int i = 0; i < vulkanSwapchainImageCount; i++) {
+    fnDestroyFramebuffer(vulkanLogicalDevice, vulkanFramebuffers[i], NULL);
+  }
+  free(vulkanFramebuffers);
   fnDestroyPipeline(vulkanLogicalDevice, vulkanGraphicsPipeline, NULL);
   fnDestroyRenderPass(vulkanLogicalDevice, vulkanRenderPass, NULL);
   fnDestroyPipelineLayout(vulkanLogicalDevice, vulkanPipelineLayout, NULL);
