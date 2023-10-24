@@ -44,6 +44,7 @@ static VkRenderPass vulkanRenderPass = NULL;
 static VkPipelineLayout vulkanPipelineLayout = NULL;
 static VkPipeline vulkanGraphicsPipeline = NULL;
 static VkFramebuffer* vulkanFramebuffers = NULL;
+static VkCommandPool vulkanCommandPool = NULL;
 static VkInstance vulkanInstance = NULL;
 static VkDevice vulkanLogicalDevice = NULL;
 static VkQueue vulkanGraphicsQueue = NULL;
@@ -94,6 +95,9 @@ static PFN_vkCreateGraphicsPipelines fnCreateGraphicsPipelines = NULL;
 static PFN_vkDestroyPipeline fnDestroyPipeline = NULL;
 static PFN_vkCreateFramebuffer fnCreateFramebuffer = NULL;
 static PFN_vkDestroyFramebuffer fnDestroyFramebuffer = NULL;
+static PFN_vkCreateCommandPool fnCreateCommandPool = NULL;
+static PFN_vkDestroyCommandPool fnDestroyCommandPool = NULL;
+
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -325,6 +329,8 @@ int init() {
   LOAD_VK_FN(vulkanInstance, DestroyPipeline);
   LOAD_VK_FN(vulkanInstance, CreateFramebuffer);
   LOAD_VK_FN(vulkanInstance, DestroyFramebuffer);
+  LOAD_VK_FN(vulkanInstance, CreateCommandPool);
+  LOAD_VK_FN(vulkanInstance, DestroyCommandPool);
 
   // Create debug messenger
   if(!layerMissing && !instanceExtensionMissing) {
@@ -824,6 +830,17 @@ int init() {
           }
           SDL_Log("Successfully initialized framebuffer\n");
 
+          // Command pool
+          VkCommandPoolCreateInfo cpci = {};
+          cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+          cpci.pNext = NULL;
+          cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+          cpci.queueFamilyIndex = graphicsQueueIndex;
+          if(fnCreateCommandPool(vulkanLogicalDevice, &cpci, NULL, &vulkanCommandPool) != VK_SUCCESS) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make command pool.\n");
+            return -1;
+          }
+
           SDL_Log("Successfully initialized Vulkan.\n");
           return 0;
         } else {
@@ -847,6 +864,7 @@ int init() {
 }
 
 void cleanupVulkan() {
+  fnDestroyCommandPool(vulkanLogicalDevice, vulkanCommandPool, NULL);
   for(int i = 0; i < vulkanSwapchainImageCount; i++) {
     fnDestroyFramebuffer(vulkanLogicalDevice, vulkanFramebuffers[i], NULL);
   }
