@@ -47,6 +47,9 @@ static VkPipeline vulkanGraphicsPipeline = NULL;
 static VkFramebuffer* vulkanFramebuffers = NULL;
 static VkCommandPool vulkanCommandPool = NULL;
 static VkCommandBuffer vulkanCommandBuffer = NULL;
+static VkSemaphore imageAvailableSemaphore = NULL;
+static VkSemaphore renderFinishedSemaphore = NULL;
+static VkFence inFlightFence = NULL;
 static VkInstance vulkanInstance = NULL;
 static VkDevice vulkanLogicalDevice = NULL;
 static VkQueue vulkanGraphicsQueue = NULL;
@@ -90,11 +93,11 @@ static PFN_vkDestroyImageView fnDestroyImageView = NULL;
 static PFN_vkCreateShaderModule fnCreateShaderModule = NULL;
 static PFN_vkDestroyShaderModule fnDestroyShaderModule = NULL;
 static PFN_vkCreatePipelineLayout fnCreatePipelineLayout = NULL;
-static PFN_vkDestroyPipelineLayout fnDestroyPipelineLayout = NULL;
 static PFN_vkCreateRenderPass fnCreateRenderPass = NULL;
 static PFN_vkDestroyRenderPass fnDestroyRenderPass = NULL;
 static PFN_vkCreateGraphicsPipelines fnCreateGraphicsPipelines = NULL;
 static PFN_vkDestroyPipeline fnDestroyPipeline = NULL;
+static PFN_vkDestroyPipelineLayout fnDestroyPipelineLayout = NULL;
 static PFN_vkCreateFramebuffer fnCreateFramebuffer = NULL;
 static PFN_vkDestroyFramebuffer fnDestroyFramebuffer = NULL;
 static PFN_vkCreateCommandPool fnCreateCommandPool = NULL;
@@ -108,6 +111,17 @@ static PFN_vkCmdSetScissor fnCmdSetScissor = NULL;
 static PFN_vkCmdDraw fnCmdDraw = NULL;
 static PFN_vkCmdEndRenderPass fnCmdEndRenderPass = NULL;
 static PFN_vkEndCommandBuffer fnEndCommandBuffer = NULL;
+static PFN_vkResetCommandBuffer fnResetCommandBuffer = NULL;
+static PFN_vkCreateSemaphore fnCreateSemaphore = NULL;
+static PFN_vkCreateFence fnCreateFence = NULL;
+static PFN_vkDestroySemaphore fnDestroySemaphore = NULL;
+static PFN_vkDestroyFence fnDestroyFence = NULL;
+static PFN_vkWaitForFences fnWaitForFences = NULL;
+static PFN_vkResetFences fnResetFences = NULL;
+static PFN_vkAcquireNextImageKHR fnAcquireNextImageKHR = NULL;
+static PFN_vkQueueSubmit fnQueueSubmit = NULL;
+static PFN_vkQueuePresentKHR fnQueuePresentKHR = NULL;
+static PFN_vkDeviceWaitIdle fnDeviceWaitIdle = NULL;
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -350,6 +364,17 @@ int init() {
   LOAD_VK_FN(vulkanInstance, CmdDraw);
   LOAD_VK_FN(vulkanInstance, CmdEndRenderPass);
   LOAD_VK_FN(vulkanInstance, EndCommandBuffer);
+  LOAD_VK_FN(vulkanInstance, ResetCommandBuffer);
+  LOAD_VK_FN(vulkanInstance, CreateSemaphore);
+  LOAD_VK_FN(vulkanInstance, CreateFence);
+  LOAD_VK_FN(vulkanInstance, DestroySemaphore);
+  LOAD_VK_FN(vulkanInstance, DestroyFence);
+  LOAD_VK_FN(vulkanInstance, WaitForFences);
+  LOAD_VK_FN(vulkanInstance, ResetFences);
+  LOAD_VK_FN(vulkanInstance, AcquireNextImageKHR);
+  LOAD_VK_FN(vulkanInstance, QueueSubmit);
+  LOAD_VK_FN(vulkanInstance, QueuePresentKHR);
+  LOAD_VK_FN(vulkanInstance, DeviceWaitIdle);
 
   // Create debug messenger
   if(!layerMissing && !instanceExtensionMissing) {
@@ -790,6 +815,15 @@ int init() {
           rpci.pAttachments = &colorAttachment;
           rpci.subpassCount = 1;
           rpci.pSubpasses = &subpass;
+          VkSubpassDependency dep = {};
+          dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+          dep.dstSubpass = 0;
+          dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+          dep.srcAccessMask = 0;
+          dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+          dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+          rpci.dependencyCount = 1;
+          rpci.pDependencies = &dep;
 
           if(fnCreateRenderPass(vulkanLogicalDevice, &rpci, NULL, &vulkanRenderPass) != VK_SUCCESS) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make render pass.\n");
@@ -868,12 +902,29 @@ int init() {
           cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
           cbai.commandBufferCount = 1;
 
-            if(fnAllocateCommandBuffers(vulkanLogicalDevice, &cbai, &vulkanCommandBuffer) != VK_SUCCESS) {
+          if(fnAllocateCommandBuffers(vulkanLogicalDevice, &cbai, &vulkanCommandBuffer) != VK_SUCCESS) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make command buffer.\n");
             return -1;
           }
 
           SDL_Log("Successfully initialized command buffer.\n");
+
+          // Sync
+          VkSemaphoreCreateInfo sci = {};
+          sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+          VkFenceCreateInfo fci = {};
+          fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+          fci.flags = VK_FENCE_CREATE_SIGNALED_BIT; // Prevent locked immediately
+
+          if(vkCreateSemaphore(vulkanLogicalDevice, &sci, NULL, &imageAvailableSemaphore) != VK_SUCCESS ||
+             vkCreateSemaphore(vulkanLogicalDevice, &sci, NULL, &renderFinishedSemaphore) != VK_SUCCESS ||
+             vkCreateFence(vulkanLogicalDevice, &fci, NULL, &inFlightFence) != VK_SUCCESS) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create sync objects.\n");
+            return -1;
+          }
+          SDL_Log("Successfully initialized sync objects.\n");
+
           SDL_Log("Successfully initialized Vulkan.\n");
           return 0;
         } else {
@@ -923,7 +974,7 @@ int recordCommandBuffer(uint32_t index) {
   viewport.x = 0.0f;
   viewport.y = 0.0f;
   viewport.width = (float) vulkanSwapExtent.width;
-  viewport.height - (float) vulkanSwapExtent.height;
+  viewport.height = (float) vulkanSwapExtent.height;
   viewport.minDepth = 0.0f;
   viewport.maxDepth = 1.0f;
   fnCmdSetViewport(vulkanCommandBuffer, 0, 1, &viewport);
@@ -943,11 +994,49 @@ int recordCommandBuffer(uint32_t index) {
 }
 
 int drawFrame() {
-
+  // Wait for previous frame
+  fnWaitForFences(vulkanLogicalDevice, 1, &inFlightFence, VK_TRUE, UINT64_MAX);
+  vkResetFences(vulkanLogicalDevice, 1, &inFlightFence);
+  uint32_t imageIndex;
+  fnAcquireNextImageKHR(
+    vulkanLogicalDevice, vulkanSwapchain, 
+    UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+  fnResetCommandBuffer(vulkanCommandBuffer, 0);
+  recordCommandBuffer(imageIndex);
+  VkSubmitInfo submitInfo = {};
+  submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  VkSemaphore waitSemaphores[1] = {imageAvailableSemaphore};
+  VkPipelineStageFlags waitStages[1] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+  submitInfo.pNext = NULL;
+  submitInfo.waitSemaphoreCount = 1;
+  submitInfo.pWaitSemaphores = waitSemaphores;
+  submitInfo.pWaitDstStageMask = waitStages;
+  submitInfo.commandBufferCount = 1;
+  submitInfo.pCommandBuffers = &vulkanCommandBuffer;
+  VkSemaphore signalSemaphores[1] = {renderFinishedSemaphore};
+  submitInfo.signalSemaphoreCount = 1;
+  submitInfo.pSignalSemaphores = signalSemaphores;
+  if(fnQueueSubmit(vulkanGraphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to submit to graphics queue.\n");
+    return -1;
+  }
+  VkPresentInfoKHR presentInfo = {};
+  presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+  presentInfo.pNext = NULL;
+  presentInfo.waitSemaphoreCount = 1;
+  presentInfo.pWaitSemaphores = signalSemaphores;
+  VkSwapchainKHR swapchains[1] = {vulkanSwapchain};
+  presentInfo.swapchainCount = 1;
+  presentInfo.pSwapchains = swapchains;
+  presentInfo.pImageIndices = &imageIndex;
+  fnQueuePresentKHR(vulkanPresentQueue, &presentInfo); 
   return 0;
 }
 
 void cleanupVulkan() {
+  fnDestroySemaphore(vulkanLogicalDevice, imageAvailableSemaphore, NULL);
+  fnDestroySemaphore(vulkanLogicalDevice, renderFinishedSemaphore, NULL);
+  fnDestroyFence(vulkanLogicalDevice, inFlightFence, NULL);
   fnDestroyCommandPool(vulkanLogicalDevice, vulkanCommandPool, NULL);
   for(int i = 0; i < vulkanSwapchainImageCount; i++) {
     fnDestroyFramebuffer(vulkanLogicalDevice, vulkanFramebuffers[i], NULL);
@@ -983,7 +1072,7 @@ int main(int argc, char *argv[]) {
 
   SDL_Event event;
 
-  running = false;
+  running = true;
   recordCommandBuffer(0);
   while(running) {
     // Handle events
@@ -1000,8 +1089,11 @@ int main(int argc, char *argv[]) {
         }
       }
     }
+    drawFrame();
   }
 
+  // Wait for vulkan to finish
+  fnDeviceWaitIdle(vulkanLogicalDevice);
   cleanupSDL();
   return 0;
 }
