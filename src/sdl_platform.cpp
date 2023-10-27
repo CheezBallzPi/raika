@@ -14,22 +14,24 @@
 #include <set>
 
 // Constants
-static const char *title = "Raika";
-static const char* layers[1] = {"VK_LAYER_KHRONOS_validation"};
-static const int layerCount = 1;
-// static const char* layers[0] = {};
-// static const int layerCount = 0;
-static const char* instanceExtensions[1] = {
+static const char *TITLE = "Raika";
+static const char* ACTIVE_VAL_LAYERS[1] = {"VK_LAYER_KHRONOS_validation"};
+static const int ACTIVE_VAL_LAYER_COUNT = 1;
+// static const char* ACTIVE_VAL_LAYERS[0] = {};
+// static const int ACTIVE_VAL_LAYER_COUNT = 0;
+static const char* ACTIVE_INST_EXTENSIONS[1] = {
   VK_EXT_DEBUG_UTILS_EXTENSION_NAME
 };
-static const int instanceExtensionCount = 1;
-static const char* deviceExtensions[1] = {
+static const int ACTIVE_INST_EXTENSION_COUNT = 1;
+static const char* ACTIVE_DEV_EXTENSIONS[1] = {
   VK_KHR_SWAPCHAIN_EXTENSION_NAME
 };
-static const int deviceExtensionCount = 1;
+static const int ACTIVE_DEV_EXTENSION_COUNT = 1;
+static const int FPS = 60;
 
 // Globals
 static bool running = false;
+static uint32_t currentFrame = 0;
 static std::string basePath = "";
 static SDL_Window *window = NULL;
 static VkSurfaceKHR vulkanSurface = NULL;
@@ -161,7 +163,7 @@ int init() {
 
   // Create window
   window = SDL_CreateWindow(
-    title, 
+    TITLE, 
     SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
     400, 400,
     SDL_WINDOW_VULKAN
@@ -194,16 +196,16 @@ int init() {
 
   bool instanceExtensionMissing = false;
 
-  for(int i = 0; i < instanceExtensionCount; i++) {
+  for(int i = 0; i < ACTIVE_INST_EXTENSION_COUNT; i++) {
     bool extensionFound = false;
     for(int j = 0; j < availableInstanceExtensionCount; j++) {
-      if(strcmp(instanceExtensions[i], availableInstanceExtensions[j].extensionName) == 0) {
+      if(strcmp(ACTIVE_INST_EXTENSIONS[i], availableInstanceExtensions[j].extensionName) == 0) {
         extensionFound = true;
         break;
       }
     }
     if(!extensionFound) {
-      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Couldn't find extension %s\n", instanceExtensions[i]);
+      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Couldn't find extension %s\n", ACTIVE_INST_EXTENSIONS[i]);
       instanceExtensionMissing = true;
       break;
     }
@@ -239,15 +241,15 @@ int init() {
   }
 
   // Concatenate two extension arrays
-  const char** requestedExtensions = (const char**) malloc(sizeof(const char*) * (instanceExtensionCount + sdlNeededExtensionCount));
-  for(int i = 0; i < instanceExtensionCount; i++) {
-    requestedExtensions[i] = instanceExtensions[i];
+  const char** requestedExtensions = (const char**) malloc(sizeof(const char*) * (ACTIVE_INST_EXTENSION_COUNT + sdlNeededExtensionCount));
+  for(int i = 0; i < ACTIVE_INST_EXTENSION_COUNT; i++) {
+    requestedExtensions[i] = ACTIVE_INST_EXTENSIONS[i];
   }
   for(int i = 0; i < sdlNeededExtensionCount; i++)  {
-    requestedExtensions[i + instanceExtensionCount] = sdlNeededExtensions[i];
+    requestedExtensions[i + ACTIVE_INST_EXTENSION_COUNT] = sdlNeededExtensions[i];
   }
   SDL_Log("Requesting Extensions:\n");
-  for(int i = 0; i < (instanceExtensionCount + sdlNeededExtensionCount); i++)  {
+  for(int i = 0; i < (ACTIVE_INST_EXTENSION_COUNT + sdlNeededExtensionCount); i++)  {
     SDL_Log("  %s\n", requestedExtensions[i]);
   }
 
@@ -274,16 +276,16 @@ int init() {
 
   bool layerMissing = false;
 
-  for(int i = 0; i < layerCount; i++) {
+  for(int i = 0; i < ACTIVE_VAL_LAYER_COUNT; i++) {
     bool layerFound = false;
     for(int j = 0; j < availableLayerCount; j++) {
-      if(strcmp(layers[i], availableLayers[j].layerName) == 0) {
+      if(strcmp(ACTIVE_VAL_LAYERS[i], availableLayers[j].layerName) == 0) {
         layerFound = true;
         break;
       }
     }
     if(!layerFound) {
-      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Couldn't find layer %s\n", layers[i]);
+      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Couldn't find layer %s\n", ACTIVE_VAL_LAYERS[i]);
       layerMissing = true;
       break;
     }
@@ -307,11 +309,11 @@ int init() {
   VkInstanceCreateInfo ici = {};
   ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
   ici.pApplicationInfo = &appInfo;
-  ici.enabledExtensionCount = (instanceExtensionCount + sdlNeededExtensionCount);
+  ici.enabledExtensionCount = (ACTIVE_INST_EXTENSION_COUNT + sdlNeededExtensionCount);
   ici.ppEnabledExtensionNames = requestedExtensions;
   if(!layerMissing && !instanceExtensionMissing) {
-    ici.enabledLayerCount = layerCount;
-    ici.ppEnabledLayerNames = layers;
+    ici.enabledLayerCount = ACTIVE_VAL_LAYER_COUNT;
+    ici.ppEnabledLayerNames = ACTIVE_VAL_LAYERS;
     ici.pNext = (VkDebugUtilsMessengerCreateInfoEXT*) &dci;
   } else {
     SDL_Log("Missing validation layer or extension, skipping debug\n");
@@ -426,16 +428,18 @@ int init() {
     }
 
     bool deviceExtensionMissing = false;
-    for(int i = 0; i < deviceExtensionCount; i++) {
+    for(int i = 0; i < ACTIVE_DEV_EXTENSION_COUNT; i++) {
       bool extensionFound = false;
       for(int j = 0; j < availableDeviceExtensionCount; j++) {
-        if(strcmp(deviceExtensions[i], availableDeviceExtensions[j].extensionName) == 0) {
+        if(strcmp(ACTIVE_DEV_EXTENSIONS
+                 [i], availableDeviceExtensions[j].extensionName) == 0) {
           extensionFound = true;
           break;
         }
       }
       if(!extensionFound) {
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Couldn't find extension %s\n", deviceExtensions[i]);
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Couldn't find extension %s\n", ACTIVE_DEV_EXTENSIONS
+       [i]);
         deviceExtensionMissing = true;
         break;
       }
@@ -503,8 +507,9 @@ int init() {
       ldci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
       ldci.queueCreateInfoCount = uniqueQueueFamilyIndex.size();
       ldci.pQueueCreateInfos = qci;
-      ldci.enabledExtensionCount = deviceExtensionCount;
-      ldci.ppEnabledExtensionNames = deviceExtensions;
+      ldci.enabledExtensionCount = ACTIVE_DEV_EXTENSION_COUNT;
+      ldci.ppEnabledExtensionNames = ACTIVE_DEV_EXTENSIONS
+     ;
       ldci.pEnabledFeatures = NULL; // Enable features here if needed later
       ldci.pNext = NULL;
 
@@ -1073,8 +1078,12 @@ int main(int argc, char *argv[]) {
   SDL_Event event;
 
   running = true;
+  uint64_t perfFreq = SDL_GetPerformanceFrequency();
+  uint64_t perfCountPerFrame = (perfFreq / FPS);
   recordCommandBuffer(0);
+  uint64_t startTime;
   while(running) {
+    startTime = SDL_GetPerformanceCounter();
     // Handle events
     while(SDL_PollEvent(&event)) {
       switch(event.type) {
@@ -1090,6 +1099,12 @@ int main(int argc, char *argv[]) {
       }
     }
     drawFrame();
+    currentFrame++;
+    SDL_Log("Frame %d: Finished in %lu/%lu\n", currentFrame, SDL_GetPerformanceCounter() - startTime, perfCountPerFrame);
+    while(SDL_GetPerformanceCounter() - startTime < perfCountPerFrame) {
+      uint64_t counterLeft = (perfCountPerFrame - (SDL_GetPerformanceCounter() - startTime));
+      SDL_Delay(((1000 * counterLeft) / perfFreq) / 9 );
+    }
   }
 
   // Wait for vulkan to finish
