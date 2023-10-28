@@ -13,6 +13,19 @@
 #include <string>
 #include <set>
 
+// Debug macros
+#ifdef DEBUG
+#define DBG_LOG(args...) do { \
+    SDL_Log(args); \
+  } while(0)
+#define DBG_LOGERROR(args...) do { \
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, args); \
+  } while(0)
+#else
+#define DBG_LOG(args...) do {} while(0)
+#define DBG_LOGERROR(args...) do{} while(0)
+#endif
+
 // Constants
 static const char *TITLE = "Raika";
 static const char* ACTIVE_VAL_LAYERS[1] = {"VK_LAYER_KHRONOS_validation"};
@@ -66,7 +79,7 @@ static uint32_t presentQueueIndex = 0;
 // Function load macro
 #define LOAD_VK_FN(INSTANCE, NAME) do { \
     fn ## NAME = (PFN_vk ## NAME) fnGetInstanceProcAddr(INSTANCE, "vk" #NAME); \
-    if(!fn ## NAME) SDL_Log("Failed to load %s\n", #NAME); \
+    if(!fn ## NAME) DBG_LOG("Failed to load %s\n", #NAME); \
   } while(0)
 
 // Functions
@@ -134,7 +147,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
   void* pUserData
 ) {
-  SDL_Log("[DBG]: %s\n", pCallbackData->pMessage);
+  DBG_LOG("[DBG]: %s\n", pCallbackData->pMessage);
   return VK_FALSE;
 }
 
@@ -145,7 +158,7 @@ VkShaderModule createShaderModule(uint32_t* code, size_t size) {
   ci.pCode = code;
   VkShaderModule out;
   if(fnCreateShaderModule(vulkanLogicalDevice, &ci, NULL, &out) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create shader module\n");
+    DBG_LOGERROR("Failed to create shader module\n");
     return NULL;
   }
   return out;
@@ -158,26 +171,26 @@ int initSwapchain() {
 
   uint32_t formatCount = 0;
   if(fnGetPhysicalDeviceSurfaceFormatsKHR(vulkanPhysicalDevice, vulkanSurface, &formatCount, NULL) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting format count: %s\n", SDL_GetError());
+    DBG_LOGERROR("Error getting format count: %s\n", SDL_GetError());
     return -1;
   };
-  SDL_Log("Format count: %d\n", formatCount);
+  DBG_LOG("Format count: %d\n", formatCount);
   VkSurfaceFormatKHR* formats = (VkSurfaceFormatKHR*) malloc(sizeof(VkSurfaceFormatKHR) * formatCount);
   fnGetPhysicalDeviceSurfaceFormatsKHR(vulkanPhysicalDevice, vulkanSurface, &formatCount, formats);
-  SDL_Log("Formats written: %d\n", formatCount);
+  DBG_LOG("Formats written: %d\n", formatCount);
 
   uint32_t presentModeCount = 0;
   if(fnGetPhysicalDeviceSurfacePresentModesKHR(vulkanPhysicalDevice, vulkanSurface, &presentModeCount, NULL) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting present mode count: %s\n", SDL_GetError());
+    DBG_LOGERROR("Error getting present mode count: %s\n", SDL_GetError());
     return -1;
   };
-  SDL_Log("Present mode count: %d\n", presentModeCount);
+  DBG_LOG("Present mode count: %d\n", presentModeCount);
   VkPresentModeKHR* presentModes = (VkPresentModeKHR*) malloc(sizeof(VkPresentModeKHR) * presentModeCount);
   fnGetPhysicalDeviceSurfacePresentModesKHR(vulkanPhysicalDevice, vulkanSurface, &presentModeCount, presentModes);
-  SDL_Log("Present modes written: %d\n", presentModeCount);
+  DBG_LOG("Present modes written: %d\n", presentModeCount);
 
   if(formatCount == 0 ||  presentModeCount == 0) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Format and present mode not found.\n");
+    DBG_LOGERROR("Format and present mode not found.\n");
     return -1;
   }
   // Set details for swapchain
@@ -264,23 +277,23 @@ int initSwapchain() {
   scci.oldSwapchain = VK_NULL_HANDLE;
 
   if(fnCreateSwapchainKHR(vulkanLogicalDevice, &scci, NULL, &vulkanSwapchain) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize swapchain.\n");
+    DBG_LOGERROR("Failed to initialize swapchain.\n");
     return -1;
   };
-  SDL_Log("Successfully initalized swapchain.\n");
+  DBG_LOG("Successfully initalized swapchain.\n");
   return 0;
 }
 
 int initImageViews() {
   // Get images
   if(fnGetSwapchainImagesKHR(vulkanLogicalDevice, vulkanSwapchain, &vulkanSwapchainImageCount, NULL) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to retrieve swapchain image count.\n");
+    DBG_LOGERROR("Failed to retrieve swapchain image count.\n");
     return -1;
   };
-  SDL_Log("Swapchain image count: %d\n", vulkanSwapchainImageCount);
+  DBG_LOG("Swapchain image count: %d\n", vulkanSwapchainImageCount);
   vulkanSwapchainImages = (VkImage*) malloc(sizeof(VkImage) * vulkanSwapchainImageCount);
   if(fnGetSwapchainImagesKHR(vulkanLogicalDevice, vulkanSwapchain, &vulkanSwapchainImageCount, vulkanSwapchainImages) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to retrieve swapchain images.\n");
+    DBG_LOGERROR("Failed to retrieve swapchain images.\n");
     return -1;
   };
 
@@ -305,11 +318,11 @@ int initImageViews() {
     ivci.subresourceRange.layerCount = 1;
 
     if(fnCreateImageView(vulkanLogicalDevice, &ivci, NULL, &vulkanImageViews[i]) != VK_SUCCESS) {
-      SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create image view.\n");
+      DBG_LOGERROR("Failed to create image view.\n");
       return -1;
     };
   }
-  SDL_Log("Successfully created image views.\n");
+  DBG_LOG("Successfully created image views.\n");
   return 0;
 }
 
@@ -332,16 +345,16 @@ int initFramebuffers() {
     fci.layers = 1;
 
     if(fnCreateFramebuffer(vulkanLogicalDevice, &fci, NULL, &(vulkanFramebuffers[i])) != VK_SUCCESS) {
-      SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make framebuffer.\n");
+      DBG_LOGERROR("Failed to make framebuffer.\n");
       return -1;
     }
   }
-  SDL_Log("Successfully initialized framebuffer\n");
+  DBG_LOG("Successfully initialized framebuffer\n");
   return 0;
 }
 
 void recreateSwapchain() {
-  SDL_Log("Recreating swapchain...\n");
+  DBG_LOG("Recreating swapchain...\n");
   fnDeviceWaitIdle(vulkanLogicalDevice);
 
   for(int i = 0; i < vulkanSwapchainImageCount; i++) {
@@ -358,12 +371,12 @@ void recreateSwapchain() {
 int init() {
   // Init SDL
   if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize SDL. Error: %s\n", SDL_GetError());
+    DBG_LOGERROR("Failed to initialize SDL. Error: %s\n", SDL_GetError());
     return -1;
   }
 
   basePath = std::string(SDL_GetBasePath());
-  SDL_Log("Base path: %s\n", basePath.c_str());
+  DBG_LOG("Base path: %s\n", basePath.c_str());
 
   // Load vulkan driver
   SDL_Vulkan_LoadLibrary(NULL);
@@ -377,7 +390,7 @@ int init() {
   );
 
   if(window == NULL) { 
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize window. Error: %s\n", SDL_GetError());
+    DBG_LOGERROR("Failed to initialize window. Error: %s\n", SDL_GetError());
     return -1;
   }
 
@@ -390,15 +403,15 @@ int init() {
 
   uint32_t availableInstanceExtensionCount = 0;
   if((res = fnEnumerateInstanceExtensionProperties(NULL, &availableInstanceExtensionCount, NULL)) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting extensions: %d\n", res);
+    DBG_LOGERROR("Error getting extensions: %d\n", res);
     return res;
   };
-  SDL_Log("Extension Count: %d\n", availableInstanceExtensionCount);
+  DBG_LOG("Extension Count: %d\n", availableInstanceExtensionCount);
   VkExtensionProperties* availableInstanceExtensions = (VkExtensionProperties*) malloc(sizeof(VkExtensionProperties) * availableInstanceExtensionCount);
   fnEnumerateInstanceExtensionProperties(NULL, &availableInstanceExtensionCount, availableInstanceExtensions);
-  SDL_Log("Extensions written: %d\n", availableInstanceExtensionCount);
+  DBG_LOG("Extensions written: %d\n", availableInstanceExtensionCount);
   for(int i = 0; i < availableInstanceExtensionCount; i++) {
-    SDL_Log("Extension %d: %s\n", i + 1, availableInstanceExtensions[i].extensionName);
+    DBG_LOG("Extension %d: %s\n", i + 1, availableInstanceExtensions[i].extensionName);
   }
 
   bool instanceExtensionMissing = false;
@@ -421,15 +434,15 @@ int init() {
   // Check extensions needed for SDL
   uint32_t sdlNeededExtensionCount = 0;
   if(SDL_Vulkan_GetInstanceExtensions(window, &sdlNeededExtensionCount, NULL) != SDL_TRUE) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting SDL required extensions\n");
+    DBG_LOGERROR("Error getting SDL required extensions\n");
     return -1;
   };
-  SDL_Log("SDL Extension Count: %d\n", sdlNeededExtensionCount);
+  DBG_LOG("SDL Extension Count: %d\n", sdlNeededExtensionCount);
   const char** sdlNeededExtensions = (const char**) malloc(sizeof(const char*) * sdlNeededExtensionCount);
   SDL_Vulkan_GetInstanceExtensions(NULL, &sdlNeededExtensionCount, sdlNeededExtensions);
-  SDL_Log("SDL Extensions written: %d\n", sdlNeededExtensionCount);
+  DBG_LOG("SDL Extensions written: %d\n", sdlNeededExtensionCount);
   for(int i = 0; i < sdlNeededExtensionCount; i++) {
-    SDL_Log("SDL Extension %d: %s\n", i + 1, sdlNeededExtensions[i]);
+    DBG_LOG("SDL Extension %d: %s\n", i + 1, sdlNeededExtensions[i]);
   }
 
   for(int i = 0; i < sdlNeededExtensionCount; i++) {
@@ -455,9 +468,9 @@ int init() {
   for(int i = 0; i < sdlNeededExtensionCount; i++)  {
     requestedExtensions[i + ACTIVE_INST_EXTENSION_COUNT] = sdlNeededExtensions[i];
   }
-  SDL_Log("Requesting Extensions:\n");
+  DBG_LOG("Requesting Extensions:\n");
   for(int i = 0; i < (ACTIVE_INST_EXTENSION_COUNT + sdlNeededExtensionCount); i++)  {
-    SDL_Log("  %s\n", requestedExtensions[i]);
+    DBG_LOG("  %s\n", requestedExtensions[i]);
   }
 
   VkApplicationInfo appInfo = {};
@@ -470,15 +483,15 @@ int init() {
 
   uint32_t availableLayerCount;
   if(fnEnumerateInstanceLayerProperties(&availableLayerCount, NULL) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting layer count: %s\n", SDL_GetError());
+    DBG_LOGERROR("Error getting layer count: %s\n", SDL_GetError());
     return -1;
   };
-  SDL_Log("Layers count: %d\n", availableLayerCount);
+  DBG_LOG("Layers count: %d\n", availableLayerCount);
   VkLayerProperties* availableLayers = (VkLayerProperties*) malloc(sizeof(VkLayerProperties) * availableLayerCount);
   fnEnumerateInstanceLayerProperties(&availableLayerCount, availableLayers);
-  SDL_Log("Layers written: %d\n", availableLayerCount);
+  DBG_LOG("Layers written: %d\n", availableLayerCount);
   for(int i = 0; i < availableLayerCount; i++) {
-    SDL_Log("Layer %d: %s\n", i + 1, availableLayers[i].layerName);
+    DBG_LOG("Layer %d: %s\n", i + 1, availableLayers[i].layerName);
   }
 
   bool layerMissing = false;
@@ -523,13 +536,13 @@ int init() {
     ici.ppEnabledLayerNames = ACTIVE_VAL_LAYERS;
     ici.pNext = (VkDebugUtilsMessengerCreateInfoEXT*) &dci;
   } else {
-    SDL_Log("Missing validation layer or extension, skipping debug\n");
+    DBG_LOG("Missing validation layer or extension, skipping debug\n");
     ici.enabledLayerCount = 0;
     ici.ppEnabledLayerNames = NULL;
   }
 
   if(fnCreateInstance(&ici, nullptr, &vulkanInstance) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make vulkan instance\n");
+    DBG_LOGERROR("Failed to make vulkan instance\n");
   };
 
   // Load functions
@@ -590,26 +603,26 @@ int init() {
     LOAD_VK_FN(vulkanInstance, CreateDebugUtilsMessengerEXT);
     LOAD_VK_FN(vulkanInstance, DestroyDebugUtilsMessengerEXT);
     if(fnCreateDebugUtilsMessengerEXT(vulkanInstance, &dci, NULL, &debugMessenger) != VK_SUCCESS) {
-      SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make debug messenger\n");
+      DBG_LOGERROR("Failed to make debug messenger\n");
     }
   }
 
   // Create vulkan surface
   if(SDL_Vulkan_CreateSurface(window, vulkanInstance, &vulkanSurface) != SDL_TRUE) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize Vulkan surface. Error: %s\n", SDL_GetError());
+    DBG_LOGERROR("Failed to initialize Vulkan surface. Error: %s\n", SDL_GetError());
     return -1;
   }
 
   // Get physical devices
   uint32_t deviceCount = 0;
   if(fnEnumeratePhysicalDevices(vulkanInstance, &deviceCount, NULL) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting device count: %s\n", SDL_GetError());
+    DBG_LOGERROR("Error getting device count: %s\n", SDL_GetError());
     return -1;
   };
-  SDL_Log("Devices count: %d\n", deviceCount);
+  DBG_LOG("Devices count: %d\n", deviceCount);
   VkPhysicalDevice* devices = (VkPhysicalDevice*) malloc(sizeof(VkPhysicalDevice) * deviceCount);
   fnEnumeratePhysicalDevices(vulkanInstance, &deviceCount, devices);
-  SDL_Log("Devices written: %d\n", deviceCount);
+  DBG_LOG("Devices written: %d\n", deviceCount);
 
   // Check physical device suitability
   for(int i = 0; i < deviceCount; i++) {
@@ -618,20 +631,20 @@ int init() {
     fnGetPhysicalDeviceProperties(devices[i], &deviceProperties);
     fnGetPhysicalDeviceFeatures(devices[i], &deviceFeatures);
 
-    SDL_Log("Checking device: %s\n", deviceProperties.deviceName);
+    DBG_LOG("Checking device: %s\n", deviceProperties.deviceName);
 
     // Check extensions
     uint32_t availableDeviceExtensionCount = 0;
     if((res = fnEnumerateDeviceExtensionProperties(devices[i], NULL, &availableDeviceExtensionCount, NULL)) != VK_SUCCESS) {
-      SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting device extensions: %d\n", res);
+      DBG_LOGERROR("Error getting device extensions: %d\n", res);
       return res;
     };
-    SDL_Log("Device extension Count: %d\n", availableDeviceExtensionCount);
+    DBG_LOG("Device extension Count: %d\n", availableDeviceExtensionCount);
     VkExtensionProperties* availableDeviceExtensions = (VkExtensionProperties*) malloc(sizeof(VkExtensionProperties) * availableDeviceExtensionCount);
     fnEnumerateDeviceExtensionProperties(devices[i], NULL, &availableDeviceExtensionCount, availableDeviceExtensions);
-    SDL_Log("Device extensions written: %d\n", availableDeviceExtensionCount);
+    DBG_LOG("Device extensions written: %d\n", availableDeviceExtensionCount);
     for(int i = 0; i < availableDeviceExtensionCount; i++) {
-      SDL_Log("Device extension %d: %s\n", i + 1, availableDeviceExtensions[i].extensionName);
+      DBG_LOG("Device extension %d: %s\n", i + 1, availableDeviceExtensions[i].extensionName);
     }
 
     bool deviceExtensionMissing = false;
@@ -659,26 +672,26 @@ int init() {
     // Get queue families for the device we found
     uint32_t availableQueueCount = 0;
     fnGetPhysicalDeviceQueueFamilyProperties(devices[i], &availableQueueCount, NULL);
-    SDL_Log("Queues count: %d\n", availableQueueCount);
+    DBG_LOG("Queues count: %d\n", availableQueueCount);
     VkQueueFamilyProperties* availableQueues = (VkQueueFamilyProperties*) malloc(sizeof(VkQueueFamilyProperties) * availableQueueCount);
     fnGetPhysicalDeviceQueueFamilyProperties(devices[i], &availableQueueCount, availableQueues);
-    SDL_Log("Queues written: %d\n", availableQueueCount);
+    DBG_LOG("Queues written: %d\n", availableQueueCount);
 
     bool graphicsSupported = false;
     bool presentSupported = false;
 
     for(int j = 0; j < availableQueueCount; j++) {
       if(availableQueues[j].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-        SDL_Log("Queue %d: Graphics found (Count: %d)\n", j, availableQueues[j].queueCount);
+        DBG_LOG("Queue %d: Graphics found (Count: %d)\n", j, availableQueues[j].queueCount);
         graphicsQueueIndex = j;
         graphicsSupported = true;
       };
       VkBool32 surfaceSupported;
       if(fnGetPhysicalDeviceSurfaceSupportKHR(devices[i], j, vulkanSurface, &surfaceSupported) != VK_SUCCESS) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to get physical device surface support.\n");
+        DBG_LOGERROR("Failed to get physical device surface support.\n");
       };
       if(surfaceSupported == VK_TRUE) {
-        SDL_Log("Queue %d: Presentation found (Count: %d)\n", j, availableQueues[j].queueCount);
+        DBG_LOG("Queue %d: Presentation found (Count: %d)\n", j, availableQueues[j].queueCount);
         presentQueueIndex = j; 
         presentSupported = true;
       };
@@ -689,14 +702,14 @@ int init() {
       }
     }
     if(vulkanPhysicalDevice != VK_NULL_HANDLE) {
-      SDL_Log("Found device!\n");
+      DBG_LOG("Found device!\n");
       break;
     }
   }
 
   if(vulkanPhysicalDevice == VK_NULL_HANDLE) {
     // No suitable device found
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to find suitable physical device.\n");
+    DBG_LOGERROR("Failed to find suitable physical device.\n");
     return -1;
   }
 
@@ -726,20 +739,20 @@ int init() {
   ldci.pNext = NULL;
 
   if((res = fnCreateDevice(vulkanPhysicalDevice, &ldci, NULL, &vulkanLogicalDevice)) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize logical device: %d\n", res);
+    DBG_LOGERROR("Failed to initialize logical device: %d\n", res);
   }
 
   fnGetDeviceQueue(vulkanLogicalDevice, graphicsQueueIndex, 0, &vulkanGraphicsQueue);
   fnGetDeviceQueue(vulkanLogicalDevice, presentQueueIndex, 0, &vulkanPresentQueue);
 
   if(initSwapchain() != 0) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize swapchain.\n");
+    DBG_LOGERROR("Failed to initialize swapchain.\n");
     return -1;
   }    
 
   // Image views
   if(initImageViews() != 0) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize image views.\n");
+    DBG_LOGERROR("Failed to initialize image views.\n");
     return -1;
   }    
   // Create the graphics pipeline
@@ -748,8 +761,8 @@ int init() {
   uint32_t* shaderFrag = (uint32_t*) SDL_LoadFile((basePath + "/frag.spv").c_str(), &fragSize);
   uint32_t* shaderVert = (uint32_t*) SDL_LoadFile((basePath + "/vert.spv").c_str(), &vertSize);
 
-  SDL_Log("Frag size: %zu\n", fragSize);
-  SDL_Log("Vert size: %zu\n", vertSize);
+  DBG_LOG("Frag size: %zu\n", fragSize);
+  DBG_LOG("Vert size: %zu\n", vertSize);
 
   fragModule = createShaderModule(shaderFrag, fragSize);
   vertModule = createShaderModule(shaderVert, vertSize);
@@ -758,11 +771,11 @@ int init() {
   SDL_free(shaderVert); 
 
   if(fragModule == NULL || vertModule == NULL) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize shaders.\n");
+    DBG_LOGERROR("Failed to initialize shaders.\n");
     return -1;
   }
 
-  SDL_Log("Successfully initialized shaders.\n");
+  DBG_LOG("Successfully initialized shaders.\n");
   // Shader stages
   VkPipelineShaderStageCreateInfo pssci[2] = {};
   pssci[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -857,11 +870,11 @@ int init() {
   plci.flags = 0;
 
   if(fnCreatePipelineLayout(vulkanLogicalDevice, &plci, NULL, &vulkanPipelineLayout) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make pipeline layout.\n");
+    DBG_LOGERROR("Failed to make pipeline layout.\n");
     return -1;
   }
 
-  SDL_Log("Successfully initialized pipeline layout.\n");
+  DBG_LOG("Successfully initialized pipeline layout.\n");
 
   // Render pass
   VkAttachmentDescription colorAttachment = {};
@@ -904,11 +917,11 @@ int init() {
   rpci.pDependencies = &dep;
 
   if(fnCreateRenderPass(vulkanLogicalDevice, &rpci, NULL, &vulkanRenderPass) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make render pass.\n");
+    DBG_LOGERROR("Failed to make render pass.\n");
     return -1;
   }
 
-  SDL_Log("Successfully initialized render pass.\n");
+  DBG_LOG("Successfully initialized render pass.\n");
 
   // Finally we can make the pipeline
   VkGraphicsPipelineCreateInfo gpci = {};
@@ -929,15 +942,15 @@ int init() {
   gpci.subpass = 0;
 
   if(fnCreateGraphicsPipelines(vulkanLogicalDevice, NULL, 1, &gpci, NULL, &vulkanGraphicsPipeline) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make graphics pipeline.\n");
+    DBG_LOGERROR("Failed to make graphics pipeline.\n");
     return -1;
   }
 
-  SDL_Log("Successfully initialized graphics pipeline.\n");
+  DBG_LOG("Successfully initialized graphics pipeline.\n");
 
   // Framebuffer
   if(initFramebuffers() != 0) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize framebuffer.\n");
+    DBG_LOGERROR("Failed to initialize framebuffer.\n");
     return -1;
   }
   // Command pool
@@ -947,10 +960,10 @@ int init() {
   cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
   cpci.queueFamilyIndex = graphicsQueueIndex;
   if(fnCreateCommandPool(vulkanLogicalDevice, &cpci, NULL, &vulkanCommandPool) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make command pool.\n");
+    DBG_LOGERROR("Failed to make command pool.\n");
     return -1;
   }
-  SDL_Log("Successfully initialized command pool.\n");
+  DBG_LOG("Successfully initialized command pool.\n");
 
   // Command buffer
   VkCommandBufferAllocateInfo cbai = {};
@@ -961,11 +974,11 @@ int init() {
   cbai.commandBufferCount = 1;
 
   if(fnAllocateCommandBuffers(vulkanLogicalDevice, &cbai, &vulkanCommandBuffer) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make command buffer.\n");
+    DBG_LOGERROR("Failed to make command buffer.\n");
     return -1;
   }
 
-  SDL_Log("Successfully initialized command buffer.\n");
+  DBG_LOG("Successfully initialized command buffer.\n");
 
   // Sync
   VkSemaphoreCreateInfo sci = {};
@@ -978,12 +991,12 @@ int init() {
   if(vkCreateSemaphore(vulkanLogicalDevice, &sci, NULL, &imageAvailableSemaphore) != VK_SUCCESS ||
      vkCreateSemaphore(vulkanLogicalDevice, &sci, NULL, &renderFinishedSemaphore) != VK_SUCCESS ||
      vkCreateFence(vulkanLogicalDevice, &fci, NULL, &inFlightFence) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create sync objects.\n");
+    DBG_LOGERROR("Failed to create sync objects.\n");
     return -1;
   }
-  SDL_Log("Successfully initialized sync objects.\n");
+  DBG_LOG("Successfully initialized sync objects.\n");
 
-  SDL_Log("Successfully initialized Vulkan.\n");
+  DBG_LOG("Successfully initialized Vulkan.\n");
   return 0;
 }
 
@@ -993,7 +1006,7 @@ int recordCommandBuffer(uint32_t index) {
   cbbi.pNext = NULL;
   cbbi.flags = 0;
   if(fnBeginCommandBuffer(vulkanCommandBuffer, &cbbi) != VK_SUCCESS) {
-    SDL_Log("Failed to begin buffer\n");
+    DBG_LOG("Failed to begin buffer\n");
     return -1;
   }
   VkRenderPassBeginInfo rpbi = {};
@@ -1027,7 +1040,7 @@ int recordCommandBuffer(uint32_t index) {
 
   fnCmdEndRenderPass(vulkanCommandBuffer);
   if(fnEndCommandBuffer(vulkanCommandBuffer) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to write to buffer.\n");
+    DBG_LOGERROR("Failed to write to buffer.\n");
     return -1;
   }
   return 0;
@@ -1061,7 +1074,7 @@ int drawFrame() {
   submitInfo.signalSemaphoreCount = 1;
   submitInfo.pSignalSemaphores = signalSemaphores;
   if(fnQueueSubmit(vulkanGraphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to submit to graphics queue.\n");
+    DBG_LOGERROR("Failed to submit to graphics queue.\n");
     return -1;
   }
   VkPresentInfoKHR presentInfo = {};
@@ -1076,6 +1089,9 @@ int drawFrame() {
   res = fnQueuePresentKHR(vulkanPresentQueue, &presentInfo);
   if(res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR || windowResized) {
     recreateSwapchain();
+    if(windowResized) {
+      windowResized = false;
+    }
     return 0;
   }
   return 0;
@@ -1114,7 +1130,7 @@ void cleanupSDL() {
 
 int main(int argc, char *argv[]) {
   if(init() != 0) {
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize.\n");
+    DBG_LOGERROR("Failed to initialize.\n");
     return -1;
   };
 
@@ -1133,7 +1149,7 @@ int main(int argc, char *argv[]) {
         case SDL_WINDOWEVENT: {
           switch(event.window.event) {
             case SDL_WINDOWEVENT_SIZE_CHANGED: {
-              SDL_Log("Window size changed.\n");
+              DBG_LOG("Window size changed.\n");
               windowResized = true;
               break;
             }
@@ -1141,12 +1157,12 @@ int main(int argc, char *argv[]) {
           break;
         }
         case SDL_QUIT: {
-          SDL_Log("Quitting...\n");
+          DBG_LOG("Quitting...\n");
           running = false;
           break;
         }
         default: {
-          SDL_Log("Unhandled Event: %d\n", event.type);
+          DBG_LOG("Unhandled Event: %d\n", event.type);
           break;
         }
       }
@@ -1154,7 +1170,7 @@ int main(int argc, char *argv[]) {
     drawFrame();
     currentFrame++;
     int64_t counterSpent = SDL_GetPerformanceCounter() - startTime;
-    SDL_Log("Frame %d: Finished in %.2f/%.2fms\n", currentFrame, counterSpent * 1000.0f / perfFreq, perfCountPerFrame * 1000.0f / perfFreq);
+    DBG_LOG("Frame %d: Finished in %.2f/%.2fms\n", currentFrame, counterSpent * 1000.0f / perfFreq, perfCountPerFrame * 1000.0f / perfFreq);
     while(counterSpent < perfCountPerFrame) {
       uint64_t counterLeft = (perfCountPerFrame - counterSpent);
       uint64_t msToWait = ((1000 * counterLeft) / perfFreq);
