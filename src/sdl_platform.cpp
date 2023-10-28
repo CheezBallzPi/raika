@@ -31,6 +31,7 @@ static const int FPS = 60;
 
 // Globals
 static bool running = false;
+static bool windowResized = false;
 static uint32_t currentFrame = 0;
 static std::string basePath = "";
 static SDL_Window *window = NULL;
@@ -372,7 +373,7 @@ int init() {
     TITLE, 
     SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
     400, 400,
-    SDL_WINDOW_VULKAN
+    SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
   );
 
   if(window == NULL) { 
@@ -1039,7 +1040,7 @@ int drawFrame() {
   res = fnAcquireNextImageKHR(
     vulkanLogicalDevice, vulkanSwapchain, 
     UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
-  if(res == VK_ERROR_OUT_OF_DATE_KHR) {
+  if(res == VK_ERROR_OUT_OF_DATE_KHR ) {
     recreateSwapchain();
     return 0;
   }
@@ -1073,7 +1074,7 @@ int drawFrame() {
   presentInfo.pSwapchains = swapchains;
   presentInfo.pImageIndices = &imageIndex;
   res = fnQueuePresentKHR(vulkanPresentQueue, &presentInfo);
-  if(res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR) {
+  if(res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR || windowResized) {
     recreateSwapchain();
     return 0;
   }
@@ -1129,6 +1130,16 @@ int main(int argc, char *argv[]) {
     // Handle events
     while(SDL_PollEvent(&event)) {
       switch(event.type) {
+        case SDL_WINDOWEVENT: {
+          switch(event.window.event) {
+            case SDL_WINDOWEVENT_SIZE_CHANGED: {
+              SDL_Log("Window size changed.\n");
+              windowResized = true;
+              break;
+            }
+          };
+          break;
+        }
         case SDL_QUIT: {
           SDL_Log("Quitting...\n");
           running = false;
