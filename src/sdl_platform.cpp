@@ -59,6 +59,8 @@ static VkQueue vulkanPresentQueue = NULL;
 static VkDebugUtilsMessengerEXT debugMessenger = NULL;
 static VkPhysicalDevice vulkanPhysicalDevice = VK_NULL_HANDLE;
 static VkResult res = VK_SUCCESS;
+static uint32_t graphicsQueueIndex = 0;
+static uint32_t presentQueueIndex = 0;
 
 // Function load macro
 #define LOAD_VK_FN(INSTANCE, NAME) do { \
@@ -146,6 +148,209 @@ VkShaderModule createShaderModule(uint32_t* code, size_t size) {
     return NULL;
   }
   return out;
+}
+
+int initSwapchain() {
+  // Check swapchain capability
+  VkSurfaceCapabilitiesKHR surfaceCapabilities;
+  fnGetPhysicalDeviceSurfaceCapabilitiesKHR(vulkanPhysicalDevice, vulkanSurface, &surfaceCapabilities);
+
+  uint32_t formatCount = 0;
+  if(fnGetPhysicalDeviceSurfaceFormatsKHR(vulkanPhysicalDevice, vulkanSurface, &formatCount, NULL) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting format count: %s\n", SDL_GetError());
+    return -1;
+  };
+  SDL_Log("Format count: %d\n", formatCount);
+  VkSurfaceFormatKHR* formats = (VkSurfaceFormatKHR*) malloc(sizeof(VkSurfaceFormatKHR) * formatCount);
+  fnGetPhysicalDeviceSurfaceFormatsKHR(vulkanPhysicalDevice, vulkanSurface, &formatCount, formats);
+  SDL_Log("Formats written: %d\n", formatCount);
+
+  uint32_t presentModeCount = 0;
+  if(fnGetPhysicalDeviceSurfacePresentModesKHR(vulkanPhysicalDevice, vulkanSurface, &presentModeCount, NULL) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting present mode count: %s\n", SDL_GetError());
+    return -1;
+  };
+  SDL_Log("Present mode count: %d\n", presentModeCount);
+  VkPresentModeKHR* presentModes = (VkPresentModeKHR*) malloc(sizeof(VkPresentModeKHR) * presentModeCount);
+  fnGetPhysicalDeviceSurfacePresentModesKHR(vulkanPhysicalDevice, vulkanSurface, &presentModeCount, presentModes);
+  SDL_Log("Present modes written: %d\n", presentModeCount);
+
+  if(formatCount == 0 ||  presentModeCount == 0) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Format and present mode not found.\n");
+    return -1;
+  }
+  // Set details for swapchain
+  VkSurfaceFormatKHR vulkanSurfaceFormat = {};
+  VkPresentModeKHR vulkanPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+
+  // Determine surface format
+  bool foundFormat = false;
+  for(int i = 0; i < formatCount; i++) {
+    if(
+      formats[i].format == VK_FORMAT_B8G8R8_SRGB &&
+      formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
+    ) {
+      vulkanSurfaceFormat = formats[i];
+      foundFormat = true;
+    }
+  }
+  if(!foundFormat) {
+    vulkanSurfaceFormat = formats[0]; // Default to first
+  }
+  // Set format to be used in imageviews
+  swapchainImageFormat = vulkanSurfaceFormat.format;
+
+  // Presentation mode
+  for(int i = 0; i < presentModeCount; i++) {
+    if(presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
+      vulkanPresentMode = presentModes[i];
+    }
+  }
+
+  // Swap extent
+  if(surfaceCapabilities.currentExtent.width != UINT32_MAX) {
+    vulkanSwapExtent = surfaceCapabilities.currentExtent;
+  } else {
+    int pxWidth, pxHeight;
+    SDL_GetWindowSizeInPixels(window, &pxWidth, &pxHeight);
+    vulkanSwapExtent.width = SDL_clamp(
+        (uint32_t) pxWidth, 
+        surfaceCapabilities.minImageExtent.width,
+        surfaceCapabilities.maxImageExtent.width
+      );
+    vulkanSwapExtent.height = SDL_clamp(
+        (uint32_t) pxHeight, 
+        surfaceCapabilities.minImageExtent.height,
+        surfaceCapabilities.maxImageExtent.height
+      );
+  }
+
+  // Image count
+  if(surfaceCapabilities.maxImageCount == 0) {
+    vulkanSwapchainImageCount = surfaceCapabilities.minImageCount + 1;
+  } else {
+    vulkanSwapchainImageCount = SDL_clamp(
+        surfaceCapabilities.minImageCount + 1, 
+        0,
+        surfaceCapabilities.maxImageCount 
+      );
+  }
+
+  // Make swapchain
+  VkSwapchainCreateInfoKHR scci = {};
+  scci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+  scci.pNext = NULL;
+  scci.flags = 0;
+  scci.surface = vulkanSurface;
+  scci.minImageCount = vulkanSwapchainImageCount;
+  scci.imageFormat = vulkanSurfaceFormat.format;
+  scci.imageColorSpace = vulkanSurfaceFormat.colorSpace;
+  scci.imageExtent = vulkanSwapExtent;
+  scci.imageArrayLayers = 1;
+  scci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+  if(graphicsQueueIndex != presentQueueIndex) {
+    scci.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+    scci.queueFamilyIndexCount = 2;
+    uint32_t queueFamilyIndices[] = {graphicsQueueIndex, presentQueueIndex};
+    scci.pQueueFamilyIndices = queueFamilyIndices;
+  } else {
+    scci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  }
+  scci.preTransform = surfaceCapabilities.currentTransform;
+  scci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+  scci.presentMode = vulkanPresentMode;
+  scci.clipped = VK_TRUE;
+  scci.oldSwapchain = VK_NULL_HANDLE;
+
+  if(fnCreateSwapchainKHR(vulkanLogicalDevice, &scci, NULL, &vulkanSwapchain) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize swapchain.\n");
+    return -1;
+  };
+  SDL_Log("Successfully initalized swapchain.\n");
+  return 0;
+}
+
+int initImageViews() {
+  // Get images
+  if(fnGetSwapchainImagesKHR(vulkanLogicalDevice, vulkanSwapchain, &vulkanSwapchainImageCount, NULL) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to retrieve swapchain image count.\n");
+    return -1;
+  };
+  SDL_Log("Swapchain image count: %d\n", vulkanSwapchainImageCount);
+  vulkanSwapchainImages = (VkImage*) malloc(sizeof(VkImage) * vulkanSwapchainImageCount);
+  if(fnGetSwapchainImagesKHR(vulkanLogicalDevice, vulkanSwapchain, &vulkanSwapchainImageCount, vulkanSwapchainImages) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to retrieve swapchain images.\n");
+    return -1;
+  };
+
+  // Get image views from images
+  vulkanImageViews = (VkImageView*) malloc(sizeof(VkImageView) * vulkanSwapchainImageCount);
+  for(int i = 0; i < vulkanSwapchainImageCount; i++) {
+    VkImageViewCreateInfo ivci = {};
+    ivci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    ivci.pNext = NULL;
+    ivci.flags = 0;
+    ivci.image = vulkanSwapchainImages[i];
+    ivci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    ivci.format = swapchainImageFormat;
+    ivci.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+    ivci.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+    ivci.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+    ivci.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+    ivci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ivci.subresourceRange.baseMipLevel = 0;
+    ivci.subresourceRange.levelCount = 1;
+    ivci.subresourceRange.baseArrayLayer = 0;
+    ivci.subresourceRange.layerCount = 1;
+
+    if(fnCreateImageView(vulkanLogicalDevice, &ivci, NULL, &vulkanImageViews[i]) != VK_SUCCESS) {
+      SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create image view.\n");
+      return -1;
+    };
+  }
+  SDL_Log("Successfully created image views.\n");
+  return 0;
+}
+
+int initFramebuffers() {
+  vulkanFramebuffers = (VkFramebuffer*) malloc(sizeof(VkFramebuffer) * vulkanSwapchainImageCount);
+  for(int i = 0; i < vulkanSwapchainImageCount; i++) {
+    VkImageView attachments[1] = {
+      vulkanImageViews[i]
+    };
+
+    VkFramebufferCreateInfo fci = {};
+    fci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fci.pNext = NULL;
+    fci.flags = 0;
+    fci.renderPass = vulkanRenderPass;
+    fci.attachmentCount = 1;
+    fci.pAttachments = attachments;
+    fci.width = vulkanSwapExtent.width;
+    fci.height = vulkanSwapExtent.height;
+    fci.layers = 1;
+
+    if(fnCreateFramebuffer(vulkanLogicalDevice, &fci, NULL, &(vulkanFramebuffers[i])) != VK_SUCCESS) {
+      SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make framebuffer.\n");
+      return -1;
+    }
+  }
+  SDL_Log("Successfully initialized framebuffer\n");
+  return 0;
+}
+
+void recreateSwapchain() {
+  fnDeviceWaitIdle(vulkanLogicalDevice);
+
+  for(int i = 0; i < vulkanSwapchainImageCount; i++) {
+    fnDestroyFramebuffer(vulkanLogicalDevice, vulkanFramebuffers[i], NULL);
+    fnDestroyImageView(vulkanLogicalDevice, vulkanImageViews[i], NULL);
+  }
+  fnDestroySwapchainKHR(vulkanLogicalDevice, vulkanSwapchain, NULL);
+
+  initSwapchain();
+  initImageViews();
+  initFramebuffers();
 }
 
 int init() {
@@ -457,9 +662,6 @@ int init() {
     fnGetPhysicalDeviceQueueFamilyProperties(devices[i], &availableQueueCount, availableQueues);
     SDL_Log("Queues written: %d\n", availableQueueCount);
 
-    uint32_t graphicsQueueIndex = 0;
-    uint32_t presentQueueIndex = 0;
-
     bool graphicsSupported = false;
     bool presentSupported = false;
 
@@ -480,476 +682,307 @@ int init() {
       };
       if(graphicsSupported && presentSupported) {
         // Found needed queues
+        vulkanPhysicalDevice = devices[i];
         break;
       }
     }
-
-    if(graphicsSupported && presentSupported) {
-      SDL_Log("Found suitable physical device: %s\n", deviceProperties.deviceName);
-      vulkanPhysicalDevice = devices[i];
-
-      // Create logical device from physical queue
-      std::set<uint32_t> uniqueQueueFamilyIndex = {graphicsQueueIndex, presentQueueIndex};
-      VkDeviceQueueCreateInfo* qci = (VkDeviceQueueCreateInfo*) malloc(sizeof(VkDeviceQueueCreateInfo) * uniqueQueueFamilyIndex.size());
-      const float priorities[1] = { 1.0f };
-
-      int i = 0;
-      for(uint32_t queueFamilyIndex : uniqueQueueFamilyIndex) {
-        qci[i].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        qci[i].queueFamilyIndex = queueFamilyIndex;
-        qci[i].queueCount = 1;
-        qci[i].pQueuePriorities = priorities;
-        qci[i].pNext = NULL;
-        i++;
-      }
-      
-      VkDeviceCreateInfo ldci = {};
-      ldci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-      ldci.queueCreateInfoCount = uniqueQueueFamilyIndex.size();
-      ldci.pQueueCreateInfos = qci;
-      ldci.enabledExtensionCount = ACTIVE_DEV_EXTENSION_COUNT;
-      ldci.ppEnabledExtensionNames = ACTIVE_DEV_EXTENSIONS
-     ;
-      ldci.pEnabledFeatures = NULL; // Enable features here if needed later
-      ldci.pNext = NULL;
-
-      if((res = fnCreateDevice(vulkanPhysicalDevice, &ldci, NULL, &vulkanLogicalDevice)) != VK_SUCCESS) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize logical device: %d\n", res);
-      }
-
-      fnGetDeviceQueue(vulkanLogicalDevice, graphicsQueueIndex, 0, &vulkanGraphicsQueue);
-      fnGetDeviceQueue(vulkanLogicalDevice, presentQueueIndex, 0, &vulkanPresentQueue);
-
-      // Check swapchain capability
-      VkSurfaceCapabilitiesKHR surfaceCapabilities;
-      fnGetPhysicalDeviceSurfaceCapabilitiesKHR(vulkanPhysicalDevice, vulkanSurface, &surfaceCapabilities);
-
-      uint32_t formatCount = 0;
-      if(fnGetPhysicalDeviceSurfaceFormatsKHR(vulkanPhysicalDevice, vulkanSurface, &formatCount, NULL) != VK_SUCCESS) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting format count: %s\n", SDL_GetError());
-        return -1;
-      };
-      SDL_Log("Format count: %d\n", formatCount);
-      VkSurfaceFormatKHR* formats = (VkSurfaceFormatKHR*) malloc(sizeof(VkSurfaceFormatKHR) * formatCount);
-      fnGetPhysicalDeviceSurfaceFormatsKHR(vulkanPhysicalDevice, vulkanSurface, &formatCount, formats);
-      SDL_Log("Formats written: %d\n", formatCount);
-
-      uint32_t presentModeCount = 0;
-      if(fnGetPhysicalDeviceSurfacePresentModesKHR(vulkanPhysicalDevice, vulkanSurface, &presentModeCount, NULL) != VK_SUCCESS) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error getting present mode count: %s\n", SDL_GetError());
-        return -1;
-      };
-      SDL_Log("Present mode count: %d\n", presentModeCount);
-      VkPresentModeKHR* presentModes = (VkPresentModeKHR*) malloc(sizeof(VkPresentModeKHR) * presentModeCount);
-      fnGetPhysicalDeviceSurfacePresentModesKHR(vulkanPhysicalDevice, vulkanSurface, &presentModeCount, presentModes);
-      SDL_Log("Present modes written: %d\n", presentModeCount);
-
-      if(formatCount > 0 && presentModeCount > 0) {
-        // Set details for swapchain
-        VkSurfaceFormatKHR vulkanSurfaceFormat = {};
-        VkPresentModeKHR vulkanPresentMode = VK_PRESENT_MODE_FIFO_KHR;
-
-        // Determine surface format
-        bool foundFormat = false;
-        for(int i = 0; i < formatCount; i++) {
-          if(
-            formats[i].format == VK_FORMAT_B8G8R8_SRGB &&
-            formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
-          ) {
-            vulkanSurfaceFormat = formats[i];
-            foundFormat = true;
-          }
-        }
-        if(!foundFormat) {
-          vulkanSurfaceFormat = formats[0]; // Default to first
-        }
-        // Set format to be used in imageviews
-        swapchainImageFormat = vulkanSurfaceFormat.format;
-
-        // Presentation mode
-        for(int i = 0; i < presentModeCount; i++) {
-          if(presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
-            vulkanPresentMode = presentModes[i];
-          }
-        }
-        
-        // Swap extent
-        if(surfaceCapabilities.currentExtent.width != UINT32_MAX) {
-          vulkanSwapExtent = surfaceCapabilities.currentExtent;
-        } else {
-          int pxWidth, pxHeight;
-          SDL_GetWindowSizeInPixels(window, &pxWidth, &pxHeight);
-          vulkanSwapExtent.width = SDL_clamp(
-              (uint32_t) pxWidth, 
-              surfaceCapabilities.minImageExtent.width,
-              surfaceCapabilities.maxImageExtent.width
-            );
-          vulkanSwapExtent.height = SDL_clamp(
-              (uint32_t) pxHeight, 
-              surfaceCapabilities.minImageExtent.height,
-              surfaceCapabilities.maxImageExtent.height
-            );
-        }
-
-        // Image count
-        if(surfaceCapabilities.maxImageCount == 0) {
-          vulkanSwapchainImageCount = surfaceCapabilities.minImageCount + 1;
-        } else {
-          vulkanSwapchainImageCount = SDL_clamp(
-              surfaceCapabilities.minImageCount + 1, 
-              0,
-              surfaceCapabilities.maxImageCount 
-            );
-        }
-
-        // Make swapchain
-        VkSwapchainCreateInfoKHR scci = {};
-        scci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-        scci.pNext = NULL;
-        scci.flags = 0;
-        scci.surface = vulkanSurface;
-        scci.minImageCount = vulkanSwapchainImageCount;
-        scci.imageFormat = vulkanSurfaceFormat.format;
-        scci.imageColorSpace = vulkanSurfaceFormat.colorSpace;
-        scci.imageExtent = vulkanSwapExtent;
-        scci.imageArrayLayers = 1;
-        scci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-        if(graphicsQueueIndex != presentQueueIndex) {
-          scci.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-          scci.queueFamilyIndexCount = 2;
-          uint32_t queueFamilyIndices[] = {graphicsQueueIndex, presentQueueIndex};
-          scci.pQueueFamilyIndices = queueFamilyIndices;
-        } else {
-          scci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        }
-        scci.preTransform = surfaceCapabilities.currentTransform;
-        scci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-        scci.presentMode = vulkanPresentMode;
-        scci.clipped = VK_TRUE;
-        scci.oldSwapchain = VK_NULL_HANDLE;
-
-        if(fnCreateSwapchainKHR(vulkanLogicalDevice, &scci, NULL, &vulkanSwapchain) != VK_SUCCESS) {
-          SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize swapchain.\n");
-          return -1;
-        };
-        SDL_Log("Successfully initalized swapchain.\n");
-
-        // Get images
-        if(fnGetSwapchainImagesKHR(vulkanLogicalDevice, vulkanSwapchain, &vulkanSwapchainImageCount, NULL) != VK_SUCCESS) {
-          SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to retrieve swapchain image count.\n");
-          return -1;
-        };
-        SDL_Log("Swapchain image count: %d\n", vulkanSwapchainImageCount);
-        vulkanSwapchainImages = (VkImage*) malloc(sizeof(VkImage) * vulkanSwapchainImageCount);
-        if(fnGetSwapchainImagesKHR(vulkanLogicalDevice, vulkanSwapchain, &vulkanSwapchainImageCount, vulkanSwapchainImages) != VK_SUCCESS) {
-          SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to retrieve swapchain images.\n");
-          return -1;
-        };
-
-        // Get image views from images
-        vulkanImageViews = (VkImageView*) malloc(sizeof(VkImageView) * vulkanSwapchainImageCount);
-        for(int i = 0; i < vulkanSwapchainImageCount; i++) {
-          VkImageViewCreateInfo ivci = {};
-          ivci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-          ivci.pNext = NULL;
-          ivci.flags = 0;
-          ivci.image = vulkanSwapchainImages[i];
-          ivci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-          ivci.format = swapchainImageFormat;
-          ivci.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-          ivci.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-          ivci.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-          ivci.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-          ivci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-          ivci.subresourceRange.baseMipLevel = 0;
-          ivci.subresourceRange.levelCount = 1;
-          ivci.subresourceRange.baseArrayLayer = 0;
-          ivci.subresourceRange.layerCount = 1;
-
-          if(fnCreateImageView(vulkanLogicalDevice, &ivci, NULL, &vulkanImageViews[i]) != VK_SUCCESS) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create image view.\n");
-            return -1;
-          };
-        }
-        SDL_Log("Successfully created image views.\n");
-
-        // Create the graphics pipeline
-        // Load shaders
-        size_t fragSize, vertSize; 
-        uint32_t* shaderFrag = (uint32_t*) SDL_LoadFile((basePath + "/frag.spv").c_str(), &fragSize);
-        uint32_t* shaderVert = (uint32_t*) SDL_LoadFile((basePath + "/vert.spv").c_str(), &vertSize);
-
-        SDL_Log("Frag size: %zu\n", fragSize);
-        SDL_Log("Vert size: %zu\n", vertSize);
-
-        fragModule = createShaderModule(shaderFrag, fragSize);
-        vertModule = createShaderModule(shaderVert, vertSize);
-
-        SDL_free(shaderFrag); 
-        SDL_free(shaderVert); 
-
-        if(fragModule != NULL && vertModule != NULL) {
-          SDL_Log("Successfully initialized shaders.\n");
-          // Shader stages
-          VkPipelineShaderStageCreateInfo pssci[2] = {};
-          pssci[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-          pssci[0].pNext = NULL;
-          pssci[0].flags = 0;
-          pssci[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-          pssci[0].module = vertModule;
-          pssci[0].pName = "main";
-          pssci[0].pSpecializationInfo = NULL;
-
-          pssci[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-          pssci[1].pNext = NULL;
-          pssci[1].flags = 0;
-          pssci[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-          pssci[1].module = fragModule;
-          pssci[1].pName = "main";
-          pssci[1].pSpecializationInfo = NULL;
-
-          // Create generic pipeline (consider pulling this whole process out)
-          // Dynamic states
-          VkDynamicState dynamicStates[2] = { 
-            VK_DYNAMIC_STATE_VIEWPORT,
-            VK_DYNAMIC_STATE_SCISSOR
-          }; // Hardcoded for now 
-          VkPipelineDynamicStateCreateInfo pdsci = {};
-          pdsci.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-          pdsci.pNext = NULL;
-          pdsci.flags = 0;
-          pdsci.dynamicStateCount = 2;
-          pdsci.pDynamicStates = dynamicStates;
-
-          VkPipelineVertexInputStateCreateInfo pvisci = {};
-          pvisci.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-          pvisci.pNext = NULL;
-          pvisci.flags = 0;
-          pvisci.vertexAttributeDescriptionCount = 0;
-          pvisci.pVertexAttributeDescriptions = NULL;
-          pvisci.vertexBindingDescriptionCount = 0;
-          pvisci.pVertexBindingDescriptions = NULL;
-
-          VkPipelineInputAssemblyStateCreateInfo piasci = {};
-          piasci.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-          piasci.pNext = NULL;
-          piasci.flags = 0;
-          piasci.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-          piasci.primitiveRestartEnable = VK_FALSE;
-
-          VkPipelineViewportStateCreateInfo pvsci = {};
-          pvsci.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-          pvsci.pNext = NULL;
-          pvsci.flags = 0;
-          pvsci.viewportCount = 1;
-          pvsci.scissorCount = 1;
-
-          VkPipelineRasterizationStateCreateInfo prsci = {};
-          prsci.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-          prsci.pNext = NULL;
-          prsci.flags = 0;
-          prsci.depthClampEnable = VK_FALSE;
-          prsci.rasterizerDiscardEnable = VK_FALSE;
-          prsci.polygonMode = VK_POLYGON_MODE_FILL;
-          prsci.lineWidth = 1.0f;
-          prsci.cullMode = VK_CULL_MODE_BACK_BIT;
-          prsci.frontFace = VK_FRONT_FACE_CLOCKWISE;
-          prsci.depthBiasEnable = VK_FALSE;
-
-          VkPipelineMultisampleStateCreateInfo pmsci = {};
-          pmsci.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-          pmsci.pNext = NULL;
-          pmsci.flags = 0;
-          pmsci.sampleShadingEnable = VK_FALSE; // disabled for now
-          pmsci.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-          VkPipelineColorBlendAttachmentState pcbas = {};
-          pcbas.colorWriteMask = 
-            VK_COLOR_COMPONENT_R_BIT |
-            VK_COLOR_COMPONENT_G_BIT |
-            VK_COLOR_COMPONENT_B_BIT |
-            VK_COLOR_COMPONENT_A_BIT;
-          pcbas.blendEnable = VK_FALSE;
-          VkPipelineColorBlendStateCreateInfo pcbsci = {};
-          pcbsci.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-          pcbsci.pNext = NULL;
-          pcbsci.flags = 0;
-          pcbsci.logicOpEnable = VK_FALSE;
-          pcbsci.attachmentCount = 1;
-          pcbsci.pAttachments = &pcbas; // We only have 1 so the address will suffice 
-
-          VkPipelineLayoutCreateInfo plci = {};
-          plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-          plci.pNext = NULL;
-          plci.flags = 0;
-
-          if(fnCreatePipelineLayout(vulkanLogicalDevice, &plci, NULL, &vulkanPipelineLayout) != VK_SUCCESS) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make pipeline layout.\n");
-            return -1;
-          }
-
-          SDL_Log("Successfully initialized pipeline layout.\n");
-
-          // Render pass
-          VkAttachmentDescription colorAttachment = {};
-          colorAttachment.flags = 0;
-          colorAttachment.format = swapchainImageFormat;
-          colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-          colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-          colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-          colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-          colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-          colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-          colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-          VkAttachmentReference colorAttachmentRef = {};
-          colorAttachmentRef.attachment = 0;
-          colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-          VkSubpassDescription subpass = {};
-          subpass.flags = 0;
-          subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-          subpass.colorAttachmentCount = 1;
-          subpass.pColorAttachments = &colorAttachmentRef;
-
-          VkRenderPassCreateInfo rpci = {};
-          rpci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-          rpci.pNext = NULL;
-          rpci.flags = 0;
-          rpci.attachmentCount = 1;
-          rpci.pAttachments = &colorAttachment;
-          rpci.subpassCount = 1;
-          rpci.pSubpasses = &subpass;
-          VkSubpassDependency dep = {};
-          dep.srcSubpass = VK_SUBPASS_EXTERNAL;
-          dep.dstSubpass = 0;
-          dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-          dep.srcAccessMask = 0;
-          dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-          dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-          rpci.dependencyCount = 1;
-          rpci.pDependencies = &dep;
-
-          if(fnCreateRenderPass(vulkanLogicalDevice, &rpci, NULL, &vulkanRenderPass) != VK_SUCCESS) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make render pass.\n");
-            return -1;
-          }
-
-          SDL_Log("Successfully initialized render pass.\n");
-
-          // Finally we can make the pipeline
-          VkGraphicsPipelineCreateInfo gpci = {};
-          gpci.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-          gpci.pNext = NULL;
-          gpci.flags = 0;
-          gpci.stageCount = 2;
-          gpci.pStages = pssci;
-          gpci.pVertexInputState = &pvisci;
-          gpci.pInputAssemblyState = &piasci;
-          gpci.pViewportState = &pvsci;
-          gpci.pRasterizationState = &prsci;
-          gpci.pMultisampleState = &pmsci;
-          gpci.pColorBlendState = &pcbsci;
-          gpci.pDynamicState = &pdsci;
-          gpci.layout = vulkanPipelineLayout;
-          gpci.renderPass = vulkanRenderPass;
-          gpci.subpass = 0;
-
-          if(fnCreateGraphicsPipelines(vulkanLogicalDevice, NULL, 1, &gpci, NULL, &vulkanGraphicsPipeline) != VK_SUCCESS) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make graphics pipeline.\n");
-            return -1;
-          }
-
-          SDL_Log("Successfully initialized graphics pipeline.\n");
-
-          // Framebuffer
-          vulkanFramebuffers = (VkFramebuffer*) malloc(sizeof(VkFramebuffer) * vulkanSwapchainImageCount);
-          for(int i = 0; i < vulkanSwapchainImageCount; i++) {
-            VkImageView attachments[1] = {
-              vulkanImageViews[i]
-            };
-
-            VkFramebufferCreateInfo fci = {};
-            fci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-            fci.pNext = NULL;
-            fci.flags = 0;
-            fci.renderPass = vulkanRenderPass;
-            fci.attachmentCount = 1;
-            fci.pAttachments = attachments;
-            fci.width = vulkanSwapExtent.width;
-            fci.height = vulkanSwapExtent.height;
-            fci.layers = 1;
-
-            if(fnCreateFramebuffer(vulkanLogicalDevice, &fci, NULL, &(vulkanFramebuffers[i])) != VK_SUCCESS) {
-              SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make framebuffer.\n");
-              return -1;
-            }
-          }
-          SDL_Log("Successfully initialized framebuffer\n");
-
-          // Command pool
-          VkCommandPoolCreateInfo cpci = {};
-          cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-          cpci.pNext = NULL;
-          cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-          cpci.queueFamilyIndex = graphicsQueueIndex;
-          if(fnCreateCommandPool(vulkanLogicalDevice, &cpci, NULL, &vulkanCommandPool) != VK_SUCCESS) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make command pool.\n");
-            return -1;
-          }
-          SDL_Log("Successfully initialized command pool.\n");
-
-          // Command buffer
-          VkCommandBufferAllocateInfo cbai = {};
-          cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-          cbai.pNext = NULL;
-          cbai.commandPool = vulkanCommandPool;
-          cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-          cbai.commandBufferCount = 1;
-
-          if(fnAllocateCommandBuffers(vulkanLogicalDevice, &cbai, &vulkanCommandBuffer) != VK_SUCCESS) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make command buffer.\n");
-            return -1;
-          }
-
-          SDL_Log("Successfully initialized command buffer.\n");
-
-          // Sync
-          VkSemaphoreCreateInfo sci = {};
-          sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-          VkFenceCreateInfo fci = {};
-          fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-          fci.flags = VK_FENCE_CREATE_SIGNALED_BIT; // Prevent locked immediately
-
-          if(vkCreateSemaphore(vulkanLogicalDevice, &sci, NULL, &imageAvailableSemaphore) != VK_SUCCESS ||
-             vkCreateSemaphore(vulkanLogicalDevice, &sci, NULL, &renderFinishedSemaphore) != VK_SUCCESS ||
-             vkCreateFence(vulkanLogicalDevice, &fci, NULL, &inFlightFence) != VK_SUCCESS) {
-            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create sync objects.\n");
-            return -1;
-          }
-          SDL_Log("Successfully initialized sync objects.\n");
-
-          SDL_Log("Successfully initialized Vulkan.\n");
-          return 0;
-        } else {
-          SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize shaders.\n");
-          return -1;
-        }
-      } else {
-        SDL_Log("Format and present mode are needed, skipping...\n");
-      }
+    if(vulkanPhysicalDevice != VK_NULL_HANDLE) {
+      SDL_Log("Found device!\n");
+      break;
     }
-
-    SDL_Log("Couldn't find needed support, moving on to next...\n");
   }
 
   if(vulkanPhysicalDevice == VK_NULL_HANDLE) {
     // No suitable device found
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to find suitable physical device.\n");
+    return -1;
   }
 
-  return -1;
+  // Create logical device from physical queue
+  std::set<uint32_t> uniqueQueueFamilyIndex = {graphicsQueueIndex, presentQueueIndex};
+  VkDeviceQueueCreateInfo* qci = (VkDeviceQueueCreateInfo*) malloc(sizeof(VkDeviceQueueCreateInfo) * uniqueQueueFamilyIndex.size());
+  const float priorities[1] = { 1.0f };
+
+  int j = 0;
+  for(uint32_t queueFamilyIndex : uniqueQueueFamilyIndex) {
+    qci[j].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    qci[j].queueFamilyIndex = queueFamilyIndex;
+    qci[j].queueCount = 1;
+    qci[j].pQueuePriorities = priorities;
+    qci[j].pNext = NULL;
+    j++;
+  }
+
+  VkDeviceCreateInfo ldci = {};
+  ldci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+  ldci.queueCreateInfoCount = uniqueQueueFamilyIndex.size();
+  ldci.pQueueCreateInfos = qci;
+  ldci.enabledExtensionCount = ACTIVE_DEV_EXTENSION_COUNT;
+  ldci.ppEnabledExtensionNames = ACTIVE_DEV_EXTENSIONS
+ ;
+  ldci.pEnabledFeatures = NULL; // Enable features here if needed later
+  ldci.pNext = NULL;
+
+  if((res = fnCreateDevice(vulkanPhysicalDevice, &ldci, NULL, &vulkanLogicalDevice)) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize logical device: %d\n", res);
+  }
+
+  fnGetDeviceQueue(vulkanLogicalDevice, graphicsQueueIndex, 0, &vulkanGraphicsQueue);
+  fnGetDeviceQueue(vulkanLogicalDevice, presentQueueIndex, 0, &vulkanPresentQueue);
+
+  if(initSwapchain() != 0) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize swapchain.\n");
+    return -1;
+  }    
+
+  // Image views
+  if(initImageViews() != 0) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize image views.\n");
+    return -1;
+  }    
+  // Create the graphics pipeline
+  // Load shaders
+  size_t fragSize, vertSize; 
+  uint32_t* shaderFrag = (uint32_t*) SDL_LoadFile((basePath + "/frag.spv").c_str(), &fragSize);
+  uint32_t* shaderVert = (uint32_t*) SDL_LoadFile((basePath + "/vert.spv").c_str(), &vertSize);
+
+  SDL_Log("Frag size: %zu\n", fragSize);
+  SDL_Log("Vert size: %zu\n", vertSize);
+
+  fragModule = createShaderModule(shaderFrag, fragSize);
+  vertModule = createShaderModule(shaderVert, vertSize);
+
+  SDL_free(shaderFrag); 
+  SDL_free(shaderVert); 
+
+  if(fragModule == NULL || vertModule == NULL) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize shaders.\n");
+    return -1;
+  }
+
+  SDL_Log("Successfully initialized shaders.\n");
+  // Shader stages
+  VkPipelineShaderStageCreateInfo pssci[2] = {};
+  pssci[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  pssci[0].pNext = NULL;
+  pssci[0].flags = 0;
+  pssci[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+  pssci[0].module = vertModule;
+  pssci[0].pName = "main";
+  pssci[0].pSpecializationInfo = NULL;
+
+  pssci[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  pssci[1].pNext = NULL;
+  pssci[1].flags = 0;
+  pssci[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+  pssci[1].module = fragModule;
+  pssci[1].pName = "main";
+  pssci[1].pSpecializationInfo = NULL;
+
+  // Create generic pipeline (consider pulling this whole process out)
+  // Dynamic states
+  VkDynamicState dynamicStates[2] = { 
+    VK_DYNAMIC_STATE_VIEWPORT,
+    VK_DYNAMIC_STATE_SCISSOR
+  }; // Hardcoded for now 
+  VkPipelineDynamicStateCreateInfo pdsci = {};
+  pdsci.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+  pdsci.pNext = NULL;
+  pdsci.flags = 0;
+  pdsci.dynamicStateCount = 2;
+  pdsci.pDynamicStates = dynamicStates;
+
+  VkPipelineVertexInputStateCreateInfo pvisci = {};
+  pvisci.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+  pvisci.pNext = NULL;
+  pvisci.flags = 0;
+  pvisci.vertexAttributeDescriptionCount = 0;
+  pvisci.pVertexAttributeDescriptions = NULL;
+  pvisci.vertexBindingDescriptionCount = 0;
+  pvisci.pVertexBindingDescriptions = NULL;
+
+  VkPipelineInputAssemblyStateCreateInfo piasci = {};
+  piasci.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+  piasci.pNext = NULL;
+  piasci.flags = 0;
+  piasci.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  piasci.primitiveRestartEnable = VK_FALSE;
+
+  VkPipelineViewportStateCreateInfo pvsci = {};
+  pvsci.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+  pvsci.pNext = NULL;
+  pvsci.flags = 0;
+  pvsci.viewportCount = 1;
+  pvsci.scissorCount = 1;
+
+  VkPipelineRasterizationStateCreateInfo prsci = {};
+  prsci.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+  prsci.pNext = NULL;
+  prsci.flags = 0;
+  prsci.depthClampEnable = VK_FALSE;
+  prsci.rasterizerDiscardEnable = VK_FALSE;
+  prsci.polygonMode = VK_POLYGON_MODE_FILL;
+  prsci.lineWidth = 1.0f;
+  prsci.cullMode = VK_CULL_MODE_BACK_BIT;
+  prsci.frontFace = VK_FRONT_FACE_CLOCKWISE;
+  prsci.depthBiasEnable = VK_FALSE;
+
+  VkPipelineMultisampleStateCreateInfo pmsci = {};
+  pmsci.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+  pmsci.pNext = NULL;
+  pmsci.flags = 0;
+  pmsci.sampleShadingEnable = VK_FALSE; // disabled for now
+  pmsci.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+  VkPipelineColorBlendAttachmentState pcbas = {};
+  pcbas.colorWriteMask = 
+    VK_COLOR_COMPONENT_R_BIT |
+    VK_COLOR_COMPONENT_G_BIT |
+    VK_COLOR_COMPONENT_B_BIT |
+    VK_COLOR_COMPONENT_A_BIT;
+  pcbas.blendEnable = VK_FALSE;
+  VkPipelineColorBlendStateCreateInfo pcbsci = {};
+  pcbsci.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+  pcbsci.pNext = NULL;
+  pcbsci.flags = 0;
+  pcbsci.logicOpEnable = VK_FALSE;
+  pcbsci.attachmentCount = 1;
+  pcbsci.pAttachments = &pcbas; // We only have 1 so the address will suffice 
+
+  VkPipelineLayoutCreateInfo plci = {};
+  plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  plci.pNext = NULL;
+  plci.flags = 0;
+
+  if(fnCreatePipelineLayout(vulkanLogicalDevice, &plci, NULL, &vulkanPipelineLayout) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make pipeline layout.\n");
+    return -1;
+  }
+
+  SDL_Log("Successfully initialized pipeline layout.\n");
+
+  // Render pass
+  VkAttachmentDescription colorAttachment = {};
+  colorAttachment.flags = 0;
+  colorAttachment.format = swapchainImageFormat;
+  colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+  colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+  VkAttachmentReference colorAttachmentRef = {};
+  colorAttachmentRef.attachment = 0;
+  colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+  VkSubpassDescription subpass = {};
+  subpass.flags = 0;
+  subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  subpass.colorAttachmentCount = 1;
+  subpass.pColorAttachments = &colorAttachmentRef;
+
+  VkRenderPassCreateInfo rpci = {};
+  rpci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+  rpci.pNext = NULL;
+  rpci.flags = 0;
+  rpci.attachmentCount = 1;
+  rpci.pAttachments = &colorAttachment;
+  rpci.subpassCount = 1;
+  rpci.pSubpasses = &subpass;
+  VkSubpassDependency dep = {};
+  dep.srcSubpass = VK_SUBPASS_EXTERNAL;
+  dep.dstSubpass = 0;
+  dep.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dep.srcAccessMask = 0;
+  dep.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  rpci.dependencyCount = 1;
+  rpci.pDependencies = &dep;
+
+  if(fnCreateRenderPass(vulkanLogicalDevice, &rpci, NULL, &vulkanRenderPass) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make render pass.\n");
+    return -1;
+  }
+
+  SDL_Log("Successfully initialized render pass.\n");
+
+  // Finally we can make the pipeline
+  VkGraphicsPipelineCreateInfo gpci = {};
+  gpci.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+  gpci.pNext = NULL;
+  gpci.flags = 0;
+  gpci.stageCount = 2;
+  gpci.pStages = pssci;
+  gpci.pVertexInputState = &pvisci;
+  gpci.pInputAssemblyState = &piasci;
+  gpci.pViewportState = &pvsci;
+  gpci.pRasterizationState = &prsci;
+  gpci.pMultisampleState = &pmsci;
+  gpci.pColorBlendState = &pcbsci;
+  gpci.pDynamicState = &pdsci;
+  gpci.layout = vulkanPipelineLayout;
+  gpci.renderPass = vulkanRenderPass;
+  gpci.subpass = 0;
+
+  if(fnCreateGraphicsPipelines(vulkanLogicalDevice, NULL, 1, &gpci, NULL, &vulkanGraphicsPipeline) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make graphics pipeline.\n");
+    return -1;
+  }
+
+  SDL_Log("Successfully initialized graphics pipeline.\n");
+
+  // Framebuffer
+  if(initFramebuffers() != 0) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize framebuffer.\n");
+    return -1;
+  }
+  // Command pool
+  VkCommandPoolCreateInfo cpci = {};
+  cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  cpci.pNext = NULL;
+  cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+  cpci.queueFamilyIndex = graphicsQueueIndex;
+  if(fnCreateCommandPool(vulkanLogicalDevice, &cpci, NULL, &vulkanCommandPool) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make command pool.\n");
+    return -1;
+  }
+  SDL_Log("Successfully initialized command pool.\n");
+
+  // Command buffer
+  VkCommandBufferAllocateInfo cbai = {};
+  cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  cbai.pNext = NULL;
+  cbai.commandPool = vulkanCommandPool;
+  cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  cbai.commandBufferCount = 1;
+
+  if(fnAllocateCommandBuffers(vulkanLogicalDevice, &cbai, &vulkanCommandBuffer) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to make command buffer.\n");
+    return -1;
+  }
+
+  SDL_Log("Successfully initialized command buffer.\n");
+
+  // Sync
+  VkSemaphoreCreateInfo sci = {};
+  sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+  VkFenceCreateInfo fci = {};
+  fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+  fci.flags = VK_FENCE_CREATE_SIGNALED_BIT; // Prevent locked immediately
+
+  if(vkCreateSemaphore(vulkanLogicalDevice, &sci, NULL, &imageAvailableSemaphore) != VK_SUCCESS ||
+     vkCreateSemaphore(vulkanLogicalDevice, &sci, NULL, &renderFinishedSemaphore) != VK_SUCCESS ||
+     vkCreateFence(vulkanLogicalDevice, &fci, NULL, &inFlightFence) != VK_SUCCESS) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to create sync objects.\n");
+    return -1;
+  }
+  SDL_Log("Successfully initialized sync objects.\n");
+
+  SDL_Log("Successfully initialized Vulkan.\n");
+  return 0;
 }
 
 int recordCommandBuffer(uint32_t index) {
@@ -1103,7 +1136,7 @@ int main(int argc, char *argv[]) {
     SDL_Log("Frame %d: Finished in %lu/%lu\n", currentFrame, SDL_GetPerformanceCounter() - startTime, perfCountPerFrame);
     while(SDL_GetPerformanceCounter() - startTime < perfCountPerFrame) {
       uint64_t counterLeft = (perfCountPerFrame - (SDL_GetPerformanceCounter() - startTime));
-      SDL_Delay(((1000 * counterLeft) / perfFreq) / 9 );
+      SDL_Delay(((1000 * counterLeft) / perfFreq) / 9);
     }
   }
 
