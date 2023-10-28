@@ -340,6 +340,7 @@ int initFramebuffers() {
 }
 
 void recreateSwapchain() {
+  SDL_Log("Recreating swapchain...\n");
   fnDeviceWaitIdle(vulkanLogicalDevice);
 
   for(int i = 0; i < vulkanSwapchainImageCount; i++) {
@@ -1034,11 +1035,15 @@ int recordCommandBuffer(uint32_t index) {
 int drawFrame() {
   // Wait for previous frame
   fnWaitForFences(vulkanLogicalDevice, 1, &inFlightFence, VK_TRUE, UINT64_MAX);
-  vkResetFences(vulkanLogicalDevice, 1, &inFlightFence);
   uint32_t imageIndex;
-  fnAcquireNextImageKHR(
+  res = fnAcquireNextImageKHR(
     vulkanLogicalDevice, vulkanSwapchain, 
     UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+  if(res == VK_ERROR_OUT_OF_DATE_KHR) {
+    recreateSwapchain();
+    return 0;
+  }
+  fnResetFences(vulkanLogicalDevice, 1, &inFlightFence);
   fnResetCommandBuffer(vulkanCommandBuffer, 0);
   recordCommandBuffer(imageIndex);
   VkSubmitInfo submitInfo = {};
@@ -1067,7 +1072,11 @@ int drawFrame() {
   presentInfo.swapchainCount = 1;
   presentInfo.pSwapchains = swapchains;
   presentInfo.pImageIndices = &imageIndex;
-  fnQueuePresentKHR(vulkanPresentQueue, &presentInfo); 
+  res = fnQueuePresentKHR(vulkanPresentQueue, &presentInfo);
+  if(res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR) {
+    recreateSwapchain();
+    return 0;
+  }
   return 0;
 }
 
@@ -1133,10 +1142,17 @@ int main(int argc, char *argv[]) {
     }
     drawFrame();
     currentFrame++;
-    SDL_Log("Frame %d: Finished in %lu/%lu\n", currentFrame, SDL_GetPerformanceCounter() - startTime, perfCountPerFrame);
-    while(SDL_GetPerformanceCounter() - startTime < perfCountPerFrame) {
-      uint64_t counterLeft = (perfCountPerFrame - (SDL_GetPerformanceCounter() - startTime));
-      SDL_Delay(((1000 * counterLeft) / perfFreq) / 9);
+    int64_t counterSpent = SDL_GetPerformanceCounter() - startTime;
+    SDL_Log("Frame %d: Finished in %.2f/%.2fms\n", currentFrame, counterSpent * 1000.0f / perfFreq, perfCountPerFrame * 1000.0f / perfFreq);
+    while(counterSpent < perfCountPerFrame) {
+      uint64_t counterLeft = (perfCountPerFrame - counterSpent);
+      uint64_t msToWait = ((1000 * counterLeft) / perfFreq);
+      // TODO: Make this OS Specific and use OS Specific ways to wait exact amounts of time
+      // Also benchmark how bad this spin actually is, it should be <1ms so maybe its ok?
+      if(msToWait > 0) { // Wait if within ms range, otherwise just spin
+        SDL_Delay(msToWait);
+      };
+      counterSpent = SDL_GetPerformanceCounter() - startTime;
     }
   }
 
