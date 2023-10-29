@@ -10,10 +10,10 @@ glslc ../shaders/shader.frag -o frag.spv
 
 if [ -z "${RAIKA_DEBUG}" ]
 then
-  set debugFlags=""
+  export debugFlags=""
 else
   echo "Building in debug mode..."
-  set debugFlags="-DDEBUG"
+  export debugFlags='-g -DRAIKA_DEBUG'
 fi
 
 g++ $BUILD_OPTIONS $debugFlags -o raika -Wall ../src/sdl_platform.cpp \
