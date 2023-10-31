@@ -29,6 +29,13 @@ struct Vertex {
   glm::vec3 color;
 };
 
+struct FrameData {
+  VkSemaphore imgAvlSem, rndFnsdSem;
+  VkFence inFlight;
+  VkCommandPool cp;
+  VkCommandBuffer cb;
+};
+
 // Constants
 static const char *TITLE = "Raika";
 #ifdef RAIKA_DEBUG
@@ -53,6 +60,7 @@ static const Vertex VERTICES[3] = {
   {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}} 
 };
 static const uint32_t VERTEX_COUNT = 3;
+static const uint32_t FRAME_COUNT = 2;
 
 // Globals
 static bool running = false;
@@ -72,14 +80,13 @@ static VkShaderModule fragModule = NULL;
 static VkRenderPass vulkanRenderPass = NULL;
 static VkPipelineLayout vulkanPipelineLayout = NULL;
 static VkPipeline vulkanGraphicsPipeline = NULL;
+static VkCommandPool vulkanGlobalCB = NULL;
+static FrameData vulkanFrames[FRAME_COUNT] = {};
 static VkFramebuffer* vulkanFramebuffers = NULL;
+static VkBuffer vulkanStagingBuffer = NULL;
 static VkBuffer vulkanVertexBuffer = NULL;
+static VkDeviceMemory vulkanStagingDeviceMemory = NULL;
 static VkDeviceMemory vulkanVertexDeviceMemory = NULL;
-static VkCommandPool vulkanCommandPool = NULL;
-static VkCommandBuffer vulkanCommandBuffer = NULL;
-static VkSemaphore imageAvailableSemaphore = NULL;
-static VkSemaphore renderFinishedSemaphore = NULL;
-static VkFence inFlightFence = NULL;
 static VkInstance vulkanInstance = NULL;
 static VkDevice vulkanLogicalDevice = NULL;
 static VkQueue vulkanGraphicsQueue = NULL;
@@ -137,6 +144,7 @@ static PFN_vkCreateCommandPool fnCreateCommandPool = NULL;
 static PFN_vkDestroyCommandPool fnDestroyCommandPool = NULL;
 static PFN_vkAllocateCommandBuffers fnAllocateCommandBuffers = NULL;
 static PFN_vkAllocateMemory fnAllocateMemory = NULL;
+static PFN_vkFreeCommandBuffers fnFreeCommandBuffers = NULL;
 static PFN_vkFreeMemory fnFreeMemory = NULL;
 static PFN_vkMapMemory fnMapMemory = NULL;
 static PFN_vkUnmapMemory fnUnmapMemory = NULL;
@@ -147,6 +155,7 @@ static PFN_vkCmdBindPipeline fnCmdBindPipeline = NULL;
 static PFN_vkCmdBindVertexBuffers fnCmdBindVertexBuffers = NULL;
 static PFN_vkCmdSetViewport fnCmdSetViewport = NULL;
 static PFN_vkCmdSetScissor fnCmdSetScissor = NULL;
+static PFN_vkCmdCopyBuffer fnCmdCopyBuffer = NULL;
 static PFN_vkCmdDraw fnCmdDraw = NULL;
 static PFN_vkCmdEndRenderPass fnCmdEndRenderPass = NULL;
 static PFN_vkEndCommandBuffer fnEndCommandBuffer = NULL;
@@ -161,6 +170,7 @@ static PFN_vkAcquireNextImageKHR fnAcquireNextImageKHR = NULL;
 static PFN_vkQueueSubmit fnQueueSubmit = NULL;
 static PFN_vkQueuePresentKHR fnQueuePresentKHR = NULL;
 static PFN_vkDeviceWaitIdle fnDeviceWaitIdle = NULL;
+static PFN_vkQueueWaitIdle fnQueueWaitIdle = NULL;
 static PFN_vkCreateBuffer fnCreateBuffer = NULL;
 static PFN_vkDestroyBuffer fnDestroyBuffer = NULL;
 static PFN_vkGetBufferMemoryRequirements fnGetBufferMemoryRequirements = NULL;
@@ -201,6 +211,7 @@ int loadVulkanFns() {
   LOAD_VK_FN(vulkanInstance, DestroyCommandPool);
   LOAD_VK_FN(vulkanInstance, AllocateCommandBuffers);
   LOAD_VK_FN(vulkanInstance, AllocateMemory);
+  LOAD_VK_FN(vulkanInstance, FreeCommandBuffers);
   LOAD_VK_FN(vulkanInstance, FreeMemory);
   LOAD_VK_FN(vulkanInstance, MapMemory);
   LOAD_VK_FN(vulkanInstance, UnmapMemory);
@@ -211,6 +222,7 @@ int loadVulkanFns() {
   LOAD_VK_FN(vulkanInstance, CmdBindVertexBuffers);
   LOAD_VK_FN(vulkanInstance, CmdSetViewport);
   LOAD_VK_FN(vulkanInstance, CmdSetScissor);
+  LOAD_VK_FN(vulkanInstance, CmdCopyBuffer);
   LOAD_VK_FN(vulkanInstance, CmdDraw);
   LOAD_VK_FN(vulkanInstance, CmdEndRenderPass);
   LOAD_VK_FN(vulkanInstance, EndCommandBuffer);
@@ -225,6 +237,7 @@ int loadVulkanFns() {
   LOAD_VK_FN(vulkanInstance, QueueSubmit);
   LOAD_VK_FN(vulkanInstance, QueuePresentKHR);
   LOAD_VK_FN(vulkanInstance, DeviceWaitIdle);
+  LOAD_VK_FN(vulkanInstance, QueueWaitIdle);
   LOAD_VK_FN(vulkanInstance, CreateBuffer);
   LOAD_VK_FN(vulkanInstance, DestroyBuffer);
   LOAD_VK_FN(vulkanInstance, GetBufferMemoryRequirements);
@@ -263,6 +276,42 @@ VkVertexInputAttributeDescription* getViad() {
   viads[1].offset = offsetof(Vertex, color);
 
   return viads;
+}
+
+int copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size) {
+  VkCommandBuffer cb;
+  VkCommandBufferAllocateInfo cbai = {};
+  cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  cbai.pNext = NULL;
+  cbai.commandBufferCount = 1;
+  cbai.commandPool = vulkanGlobalCB;
+  cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  if(fnAllocateCommandBuffers(vulkanLogicalDevice, &cbai, &cb) != VK_SUCCESS) {
+    DBG_LOGERROR("Failed to make copy buffer cb.\n");
+  }
+  VkCommandBufferBeginInfo cbbi = {};
+  cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  cbbi.pNext = NULL;
+  cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  fnBeginCommandBuffer(cb, &cbbi);
+  VkBufferCopy bc = {};
+  bc.size = size;
+  bc.srcOffset = 0;
+  bc.dstOffset = 0;
+  fnCmdCopyBuffer(cb, src, dst, 1, &bc);
+  fnEndCommandBuffer(cb);
+  VkSubmitInfo si = {};
+  si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  si.pNext = NULL;
+  si.commandBufferCount = 1;
+  si.pCommandBuffers = &cb;
+  if(fnQueueSubmit(vulkanGraphicsQueue, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS) {
+    DBG_LOGERROR("Failed to submit copy buffer queue.\n");
+    return -1;
+  };
+  fnQueueWaitIdle(vulkanGraphicsQueue);
+  fnFreeCommandBuffers(vulkanLogicalDevice, vulkanGlobalCB, 1, &cb);
+  return 0;
 }
 
 VkShaderModule createShaderModule(uint32_t* code, size_t size) {
@@ -480,6 +529,47 @@ void recreateSwapchain() {
   initSwapchain();
   initImageViews();
   initFramebuffers();
+}
+
+int createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags propertyFlags, VkBuffer* buffer, VkDeviceMemory* devMem) {
+  VkBufferCreateInfo bci = {};
+  bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  bci.pNext = NULL;
+  bci.flags = 0;
+  bci.size = sizeof(Vertex) * VERTEX_COUNT;
+  bci.usage = usage;
+  bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  if(fnCreateBuffer(vulkanLogicalDevice, &bci, NULL, buffer) != VK_SUCCESS) {
+    DBG_LOGERROR("Failed to make vertex buffer.\n");
+    return -1;
+  }
+  VkMemoryRequirements mr;
+  fnGetBufferMemoryRequirements(vulkanLogicalDevice, *buffer, &mr);
+  VkPhysicalDeviceMemoryProperties pdmp;
+  fnGetPhysicalDeviceMemoryProperties(vulkanPhysicalDevice, &pdmp);
+  VkMemoryAllocateInfo ai = {};
+  ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  ai.pNext = NULL;
+  ai.allocationSize = mr.size;
+  bool memoryTypeFound = false;  
+  for(uint32_t i = 0; i < pdmp.memoryTypeCount; i++) {
+    if(mr.memoryTypeBits & (1 << i) &&
+       (pdmp.memoryTypes[i].propertyFlags & propertyFlags) == propertyFlags) {
+      ai.memoryTypeIndex = i;
+      memoryTypeFound = true;
+    }
+  }
+  if(!memoryTypeFound) {
+    DBG_LOGERROR("Failed to find memory type.\n");
+    return -1;
+  }
+  if(fnAllocateMemory(vulkanLogicalDevice, &ai, NULL, devMem) != VK_SUCCESS) {
+    DBG_LOGERROR("Failed to allocate memory.\n");
+    return -1;
+  };
+  fnBindBufferMemory(vulkanLogicalDevice, *buffer, *devMem, 0);
+  DBG_LOG("Successfully allocated memory.\n");
+  return 0;
 }
 
 int init() {
@@ -1022,77 +1112,72 @@ int init() {
     DBG_LOGERROR("Failed to initialize framebuffer.\n");
     return -1;
   }
-
-  // Vertex Buffer
-  VkBufferCreateInfo vertbci = {};
-  vertbci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  vertbci.pNext = NULL;
-  vertbci.flags = 0;
-  vertbci.size = sizeof(Vertex) * VERTEX_COUNT;
-  vertbci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-  vertbci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-  if(fnCreateBuffer(vulkanLogicalDevice, &vertbci, NULL, &vulkanVertexBuffer) != VK_SUCCESS) {
-    DBG_LOGERROR("Failed to make vertex buffer.\n");
-    return -1;
-  }
-  VkMemoryRequirements vertmr;
-  fnGetBufferMemoryRequirements(vulkanLogicalDevice, vulkanVertexBuffer, &vertmr);
-  VkPhysicalDeviceMemoryProperties pdmp;
-  fnGetPhysicalDeviceMemoryProperties(vulkanPhysicalDevice, &pdmp);
-  VkMemoryAllocateInfo allocInfo = {};
-  allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-  allocInfo.pNext = NULL;
-  allocInfo.allocationSize = vertmr.size;
-  bool memoryTypeFound = false;  
-  for(uint32_t i = 0; i < pdmp.memoryTypeCount; i++) {
-    if(vertmr.memoryTypeBits & (1 << i) &&
-       (pdmp.memoryTypes[i].propertyFlags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) == (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-      allocInfo.memoryTypeIndex = i;
-      memoryTypeFound = true;
-    }
-  }
-  if(!memoryTypeFound) {
-    DBG_LOGERROR("Failed to find memory type.\n");
-    return -1;
-  }
-  if(fnAllocateMemory(vulkanLogicalDevice, &allocInfo, NULL, &vulkanVertexDeviceMemory) != VK_SUCCESS) {
-    DBG_LOGERROR("Failed to allocate memory.\n");
-    return -1;
-  };
-  fnBindBufferMemory(vulkanLogicalDevice, vulkanVertexBuffer, vulkanVertexDeviceMemory, 0);
-  DBG_LOG("Successfully allocated memory.\n");
-
-  void* vertMem;
-  fnMapMemory(vulkanLogicalDevice, vulkanVertexDeviceMemory, 0, vertbci.size, 0, &vertMem);
-  memcpy(vertMem, VERTICES, (size_t) vertbci.size);
-  fnUnmapMemory(vulkanLogicalDevice, vulkanVertexDeviceMemory);
-
+  
   // Command pool
   VkCommandPoolCreateInfo cpci = {};
   cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
   cpci.pNext = NULL;
   cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
   cpci.queueFamilyIndex = graphicsQueueIndex;
-  if(fnCreateCommandPool(vulkanLogicalDevice, &cpci, NULL, &vulkanCommandPool) != VK_SUCCESS) {
-    DBG_LOGERROR("Failed to make command pool.\n");
-    return -1;
+  for(uint32_t i = 0; i < FRAME_COUNT; i++) {
+    if(fnCreateCommandPool(vulkanLogicalDevice, &cpci, NULL, &(vulkanFrames[i].cp)) != VK_SUCCESS) {
+      DBG_LOGERROR("Failed to make command pool.\n");
+      return -1;
+    }
   }
   DBG_LOG("Successfully initialized command pool.\n");
 
   // Command buffer
-  VkCommandBufferAllocateInfo cbai = {};
-  cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-  cbai.pNext = NULL;
-  cbai.commandPool = vulkanCommandPool;
-  cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-  cbai.commandBufferCount = 1;
+  for(uint32_t i = 0; i < FRAME_COUNT; i++) {
+    VkCommandBufferAllocateInfo cbai = {};
+    cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbai.pNext = NULL;
+    cbai.commandPool = vulkanFrames[i].cp;
+    cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbai.commandBufferCount = 1;
 
-  if(fnAllocateCommandBuffers(vulkanLogicalDevice, &cbai, &vulkanCommandBuffer) != VK_SUCCESS) {
-    DBG_LOGERROR("Failed to make command buffer.\n");
+    if(fnAllocateCommandBuffers(vulkanLogicalDevice, &cbai, &(vulkanFrames[i].cb)) != VK_SUCCESS) {
+      DBG_LOGERROR("Failed to make command buffer.\n");
+      return -1;
+    }
+  }
+  // Global Command Pool
+  if(fnCreateCommandPool(vulkanLogicalDevice, &cpci, NULL, &vulkanGlobalCB)!= VK_SUCCESS) {
+    DBG_LOGERROR("Failed to make global command pool.\n");
+    return -1;
+  }
+  DBG_LOG("Successfully initialized command buffer.\n");
+
+  // Vertex Buffer
+  VkDeviceSize vertBufferSize = sizeof(Vertex) * VERTEX_COUNT;
+  if(createBuffer(
+      vertBufferSize,
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+      &vulkanStagingBuffer,
+      &vulkanStagingDeviceMemory
+     ) != 0) {
+    DBG_LOGERROR("Failed to initialize staging buffer.\n");
+    return -1;
+  }
+  if(createBuffer(
+      vertBufferSize,
+      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+      &vulkanVertexBuffer,
+      &vulkanVertexDeviceMemory
+     ) != 0) {
+    DBG_LOGERROR("Failed to initialize vertex buffer.\n");
     return -1;
   }
 
-  DBG_LOG("Successfully initialized command buffer.\n");
+  void* stgMem;
+  fnMapMemory(vulkanLogicalDevice, vulkanStagingDeviceMemory, 0, vertBufferSize, 0, &stgMem);
+  memcpy(stgMem, VERTICES, (size_t) vertBufferSize);
+  fnUnmapMemory(vulkanLogicalDevice, vulkanStagingDeviceMemory);
+  copyBuffer(vulkanStagingBuffer, vulkanVertexBuffer, vertBufferSize);
+  fnDestroyBuffer(vulkanLogicalDevice, vulkanStagingBuffer, NULL);
+  fnFreeMemory(vulkanLogicalDevice, vulkanStagingDeviceMemory, NULL);
 
   // Sync
   VkSemaphoreCreateInfo sci = {};
@@ -1102,11 +1187,13 @@ int init() {
   fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
   fci.flags = VK_FENCE_CREATE_SIGNALED_BIT; // Prevent locked immediately
 
-  if(vkCreateSemaphore(vulkanLogicalDevice, &sci, NULL, &imageAvailableSemaphore) != VK_SUCCESS ||
-     vkCreateSemaphore(vulkanLogicalDevice, &sci, NULL, &renderFinishedSemaphore) != VK_SUCCESS ||
-     vkCreateFence(vulkanLogicalDevice, &fci, NULL, &inFlightFence) != VK_SUCCESS) {
-    DBG_LOGERROR("Failed to create sync objects.\n");
-    return -1;
+  for(uint32_t i = 0; i < FRAME_COUNT; i++) {
+    if(vkCreateSemaphore(vulkanLogicalDevice, &sci, NULL, &(vulkanFrames[i].imgAvlSem)) != VK_SUCCESS ||
+       vkCreateSemaphore(vulkanLogicalDevice, &sci, NULL, &(vulkanFrames[i].rndFnsdSem)) != VK_SUCCESS ||
+       vkCreateFence(vulkanLogicalDevice, &fci, NULL, &(vulkanFrames[i].inFlight)) != VK_SUCCESS) {
+      DBG_LOGERROR("Failed to create sync objects.\n");
+      return -1;
+    }
   }
   DBG_LOG("Successfully initialized sync objects.\n");
 
@@ -1114,12 +1201,12 @@ int init() {
   return 0;
 }
 
-int recordCommandBuffer(uint32_t index) {
+int recordCommandBuffer(uint32_t index, uint32_t frame) {
   VkCommandBufferBeginInfo cbbi = {};
   cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   cbbi.pNext = NULL;
   cbbi.flags = 0;
-  if(fnBeginCommandBuffer(vulkanCommandBuffer, &cbbi) != VK_SUCCESS) {
+  if(fnBeginCommandBuffer(vulkanFrames[frame].cb, &cbbi) != VK_SUCCESS) {
     DBG_LOG("Failed to begin buffer\n");
     return -1;
   }
@@ -1134,12 +1221,12 @@ int recordCommandBuffer(uint32_t index) {
   VkClearValue clearColor = {0.0f, 0.0f, 0.0f, 1.0f};
   rpbi.pClearValues = &clearColor;
 
-  fnCmdBeginRenderPass(vulkanCommandBuffer, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
-  fnCmdBindPipeline(vulkanCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vulkanGraphicsPipeline);
+  fnCmdBeginRenderPass(vulkanFrames[frame].cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+  fnCmdBindPipeline(vulkanFrames[frame].cb, VK_PIPELINE_BIND_POINT_GRAPHICS, vulkanGraphicsPipeline);
 
   VkBuffer vertBuffers[1] = {vulkanVertexBuffer};
   VkDeviceSize offsets[1] = {0};
-  fnCmdBindVertexBuffers(vulkanCommandBuffer, 0, 1, vertBuffers, offsets);
+  fnCmdBindVertexBuffers(vulkanFrames[frame].cb, 0, 1, vertBuffers, offsets);
 
   VkViewport viewport = {};
   viewport.x = 0.0f;
@@ -1148,50 +1235,50 @@ int recordCommandBuffer(uint32_t index) {
   viewport.height = (float) vulkanSwapExtent.height;
   viewport.minDepth = 0.0f;
   viewport.maxDepth = 1.0f;
-  fnCmdSetViewport(vulkanCommandBuffer, 0, 1, &viewport);
+  fnCmdSetViewport(vulkanFrames[frame].cb, 0, 1, &viewport);
 
   VkRect2D scissor = {};
   scissor.offset = {0, 0};
   scissor.extent = vulkanSwapExtent;
-  fnCmdSetScissor(vulkanCommandBuffer, 0, 1, &scissor);
-  fnCmdDraw(vulkanCommandBuffer, VERTEX_COUNT, 1, 0, 0);
+  fnCmdSetScissor(vulkanFrames[frame].cb, 0, 1, &scissor);
+  fnCmdDraw(vulkanFrames[frame].cb, VERTEX_COUNT, 1, 0, 0);
 
-  fnCmdEndRenderPass(vulkanCommandBuffer);
-  if(fnEndCommandBuffer(vulkanCommandBuffer) != VK_SUCCESS) {
+  fnCmdEndRenderPass(vulkanFrames[frame].cb);
+  if(fnEndCommandBuffer(vulkanFrames[frame].cb) != VK_SUCCESS) {
     DBG_LOGERROR("Failed to write to buffer.\n");
     return -1;
   }
   return 0;
 }
 
-int drawFrame() {
+int drawFrame(uint32_t frame) {
   // Wait for previous frame
-  fnWaitForFences(vulkanLogicalDevice, 1, &inFlightFence, VK_TRUE, UINT64_MAX);
+  fnWaitForFences(vulkanLogicalDevice, 1, &(vulkanFrames[frame].inFlight), VK_TRUE, UINT64_MAX);
   uint32_t imageIndex;
   res = fnAcquireNextImageKHR(
     vulkanLogicalDevice, vulkanSwapchain, 
-    UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+    UINT64_MAX, vulkanFrames[frame].imgAvlSem, VK_NULL_HANDLE, &imageIndex);
   if(res == VK_ERROR_OUT_OF_DATE_KHR ) {
     recreateSwapchain();
     return 0;
   }
-  fnResetFences(vulkanLogicalDevice, 1, &inFlightFence);
-  fnResetCommandBuffer(vulkanCommandBuffer, 0);
-  recordCommandBuffer(imageIndex);
+  fnResetFences(vulkanLogicalDevice, 1, &(vulkanFrames[frame].inFlight));
+  fnResetCommandBuffer(vulkanFrames[frame].cb, 0);
+  recordCommandBuffer(imageIndex, frame);
   VkSubmitInfo submitInfo = {};
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  VkSemaphore waitSemaphores[1] = {imageAvailableSemaphore};
+  VkSemaphore waitSemaphores[1] = {vulkanFrames[frame].imgAvlSem};
   VkPipelineStageFlags waitStages[1] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
   submitInfo.pNext = NULL;
   submitInfo.waitSemaphoreCount = 1;
   submitInfo.pWaitSemaphores = waitSemaphores;
   submitInfo.pWaitDstStageMask = waitStages;
   submitInfo.commandBufferCount = 1;
-  submitInfo.pCommandBuffers = &vulkanCommandBuffer;
-  VkSemaphore signalSemaphores[1] = {renderFinishedSemaphore};
+  submitInfo.pCommandBuffers = &(vulkanFrames[frame].cb);
+  VkSemaphore signalSemaphores[1] = {vulkanFrames[frame].rndFnsdSem};
   submitInfo.signalSemaphoreCount = 1;
   submitInfo.pSignalSemaphores = signalSemaphores;
-  if(fnQueueSubmit(vulkanGraphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS) {
+  if(fnQueueSubmit(vulkanGraphicsQueue, 1, &submitInfo, vulkanFrames[frame].inFlight) != VK_SUCCESS) {
     DBG_LOGERROR("Failed to submit to graphics queue.\n");
     return -1;
   }
@@ -1216,10 +1303,13 @@ int drawFrame() {
 }
 
 void cleanupVulkan() {
-  fnDestroySemaphore(vulkanLogicalDevice, imageAvailableSemaphore, NULL);
-  fnDestroySemaphore(vulkanLogicalDevice, renderFinishedSemaphore, NULL);
-  fnDestroyFence(vulkanLogicalDevice, inFlightFence, NULL);
-  fnDestroyCommandPool(vulkanLogicalDevice, vulkanCommandPool, NULL);
+  for(uint32_t i = 0; i < FRAME_COUNT; i++) {
+    fnDestroySemaphore(vulkanLogicalDevice, vulkanFrames[i].imgAvlSem, NULL);
+    fnDestroySemaphore(vulkanLogicalDevice, vulkanFrames[i].rndFnsdSem, NULL);
+    fnDestroyFence(vulkanLogicalDevice, vulkanFrames[i].inFlight, NULL);
+    fnDestroyCommandPool(vulkanLogicalDevice, vulkanFrames[i].cp, NULL);
+  }
+  fnDestroyCommandPool(vulkanLogicalDevice, vulkanGlobalCB, NULL);
   fnDestroyBuffer(vulkanLogicalDevice, vulkanVertexBuffer, NULL);
   fnFreeMemory(vulkanLogicalDevice, vulkanVertexDeviceMemory, NULL);
   for(uint32_t i = 0; i < vulkanSwapchainImageCount; i++) {
@@ -1259,7 +1349,7 @@ int main(int argc, char *argv[]) {
   running = true;
   uint64_t perfFreq = SDL_GetPerformanceFrequency();
   uint64_t perfCountPerFrame = (perfFreq / FPS);
-  recordCommandBuffer(0);
+  recordCommandBuffer(0, currentFrame % FRAME_COUNT);
   uint64_t startTime;
   while(running) {
     startTime = SDL_GetPerformanceCounter();
@@ -1287,7 +1377,7 @@ int main(int argc, char *argv[]) {
         }
       }
     }
-    drawFrame();
+    drawFrame(currentFrame % FRAME_COUNT);
     currentFrame++;
     uint64_t counterSpent = SDL_GetPerformanceCounter() - startTime;
     DBG_LOG("Frame %d: Finished in %.2f/%.2fms\n", currentFrame, counterSpent * 1000.0f / perfFreq, perfCountPerFrame * 1000.0f / perfFreq);
