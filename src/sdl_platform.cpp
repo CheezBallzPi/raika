@@ -34,6 +34,15 @@ struct FrameData {
   VkFence inFlight;
   VkCommandPool cp;
   VkCommandBuffer cb;
+
+  // Uniform
+  VkBuffer ub;
+  VkDeviceMemory ubMem;
+  void* ubMapped; 
+};
+
+struct ViewData {
+  glm::vec2 offset;
 };
 
 // Constants
@@ -61,6 +70,8 @@ static const Vertex VERTICES[3] = {
 };
 static const uint32_t VERTEX_COUNT = 3;
 static const uint32_t FRAME_COUNT = 2;
+static const uint32_t HEIGHT = 500;
+static const uint32_t WIDTH = 500;
 
 // Globals
 static bool running = false;
@@ -78,6 +89,9 @@ static VkImageView* vulkanImageViews = NULL;
 static VkShaderModule vertModule = NULL;
 static VkShaderModule fragModule = NULL;
 static VkRenderPass vulkanRenderPass = NULL;
+static VkDescriptorSetLayout vulkanDescriptorSetLayouts[FRAME_COUNT] = {};
+static VkDescriptorPool vulkanDescriptorPool = NULL;
+static VkDescriptorSet vulkanDescriptorSets[FRAME_COUNT] = {};
 static VkPipelineLayout vulkanPipelineLayout = NULL;
 static VkPipeline vulkanGraphicsPipeline = NULL;
 static VkCommandPool vulkanGlobalCB = NULL;
@@ -136,14 +150,20 @@ static PFN_vkCreatePipelineLayout fnCreatePipelineLayout = NULL;
 static PFN_vkCreateRenderPass fnCreateRenderPass = NULL;
 static PFN_vkDestroyRenderPass fnDestroyRenderPass = NULL;
 static PFN_vkCreateGraphicsPipelines fnCreateGraphicsPipelines = NULL;
+static PFN_vkCreateDescriptorSetLayout fnCreateDescriptorSetLayout = NULL;
+static PFN_vkCreateDescriptorPool fnCreateDescriptorPool = NULL;
+static PFN_vkUpdateDescriptorSets fnUpdateDescriptorSets = NULL;
 static PFN_vkDestroyPipeline fnDestroyPipeline = NULL;
 static PFN_vkDestroyPipelineLayout fnDestroyPipelineLayout = NULL;
+static PFN_vkDestroyDescriptorSetLayout fnDestroyDescriptorSetLayout = NULL;
+static PFN_vkDestroyDescriptorPool fnDestroyDescriptorPool = NULL;
 static PFN_vkCreateFramebuffer fnCreateFramebuffer = NULL;
 static PFN_vkDestroyFramebuffer fnDestroyFramebuffer = NULL;
 static PFN_vkCreateCommandPool fnCreateCommandPool = NULL;
 static PFN_vkDestroyCommandPool fnDestroyCommandPool = NULL;
 static PFN_vkAllocateCommandBuffers fnAllocateCommandBuffers = NULL;
 static PFN_vkAllocateMemory fnAllocateMemory = NULL;
+static PFN_vkAllocateDescriptorSets fnAllocateDescriptorSets = NULL;
 static PFN_vkFreeCommandBuffers fnFreeCommandBuffers = NULL;
 static PFN_vkFreeMemory fnFreeMemory = NULL;
 static PFN_vkMapMemory fnMapMemory = NULL;
@@ -153,6 +173,7 @@ static PFN_vkBeginCommandBuffer fnBeginCommandBuffer = NULL;
 static PFN_vkCmdBeginRenderPass fnCmdBeginRenderPass = NULL;
 static PFN_vkCmdBindPipeline fnCmdBindPipeline = NULL;
 static PFN_vkCmdBindVertexBuffers fnCmdBindVertexBuffers = NULL;
+static PFN_vkCmdBindDescriptorSets fnCmdBindDescriptorSets = NULL;
 static PFN_vkCmdSetViewport fnCmdSetViewport = NULL;
 static PFN_vkCmdSetScissor fnCmdSetScissor = NULL;
 static PFN_vkCmdCopyBuffer fnCmdCopyBuffer = NULL;
@@ -204,6 +225,11 @@ int loadVulkanFns() {
   LOAD_VK_FN(vulkanInstance, CreateRenderPass);
   LOAD_VK_FN(vulkanInstance, DestroyRenderPass);
   LOAD_VK_FN(vulkanInstance, CreateGraphicsPipelines);
+  LOAD_VK_FN(vulkanInstance, CreateDescriptorSetLayout);
+  LOAD_VK_FN(vulkanInstance, DestroyDescriptorSetLayout);
+  LOAD_VK_FN(vulkanInstance, UpdateDescriptorSets);
+  LOAD_VK_FN(vulkanInstance, CreateDescriptorPool);
+  LOAD_VK_FN(vulkanInstance, DestroyDescriptorPool);
   LOAD_VK_FN(vulkanInstance, DestroyPipeline);
   LOAD_VK_FN(vulkanInstance, CreateFramebuffer);
   LOAD_VK_FN(vulkanInstance, DestroyFramebuffer);
@@ -211,6 +237,7 @@ int loadVulkanFns() {
   LOAD_VK_FN(vulkanInstance, DestroyCommandPool);
   LOAD_VK_FN(vulkanInstance, AllocateCommandBuffers);
   LOAD_VK_FN(vulkanInstance, AllocateMemory);
+  LOAD_VK_FN(vulkanInstance, AllocateDescriptorSets);
   LOAD_VK_FN(vulkanInstance, FreeCommandBuffers);
   LOAD_VK_FN(vulkanInstance, FreeMemory);
   LOAD_VK_FN(vulkanInstance, MapMemory);
@@ -220,6 +247,7 @@ int loadVulkanFns() {
   LOAD_VK_FN(vulkanInstance, CmdBeginRenderPass);
   LOAD_VK_FN(vulkanInstance, CmdBindPipeline);
   LOAD_VK_FN(vulkanInstance, CmdBindVertexBuffers);
+  LOAD_VK_FN(vulkanInstance, CmdBindDescriptorSets);
   LOAD_VK_FN(vulkanInstance, CmdSetViewport);
   LOAD_VK_FN(vulkanInstance, CmdSetScissor);
   LOAD_VK_FN(vulkanInstance, CmdCopyBuffer);
@@ -390,6 +418,12 @@ int initSwapchain() {
   } else {
     int pxWidth, pxHeight;
     SDL_GetWindowSizeInPixels(window, &pxWidth, &pxHeight);
+    bool lockHeight = ((uint32_t) pxHeight / (uint32_t) pxWidth) < (HEIGHT / WIDTH);
+    if(lockHeight) {
+      pxWidth = (pxHeight * WIDTH) / HEIGHT;
+    } else {
+      pxHeight = (pxWidth * HEIGHT) / WIDTH;
+    }
     vulkanSwapExtent.width = SDL_clamp(
         (uint32_t) pxWidth, 
         surfaceCapabilities.minImageExtent.width,
@@ -911,7 +945,91 @@ int init() {
   if(initImageViews() != 0) {
     DBG_LOGERROR("Failed to initialize image views.\n");
     return -1;
-  }    
+  }
+
+  // Uniform buffers
+  for(uint32_t i = 0; i < FRAME_COUNT; i++) {
+    if(createBuffer(
+        sizeof(ViewData),
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        &(vulkanFrames[i].ub),
+        &(vulkanFrames[i].ubMem)
+       ) != 0) {
+      DBG_LOGERROR("Failed to initialize uniform buffer.\n");
+      return -1;
+    }
+    fnMapMemory(vulkanLogicalDevice, vulkanFrames[i].ubMem, 0, sizeof(ViewData), 0, &(vulkanFrames[i].ubMapped));
+  }
+
+  // Descriptor Pool
+  VkDescriptorPoolSize dps = {};
+  dps.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  dps.descriptorCount = FRAME_COUNT;
+  VkDescriptorPoolCreateInfo dpci = {};
+  dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  dpci.pNext = NULL;
+  dpci.poolSizeCount = 1;
+  dpci.pPoolSizes = &dps;
+  dpci.maxSets = FRAME_COUNT;
+
+  if(fnCreateDescriptorPool(vulkanLogicalDevice, &dpci, NULL, &vulkanDescriptorPool) != VK_SUCCESS) {
+    DBG_LOGERROR("Failed to initialize desc pool.\n");
+    return -1;
+  }
+  DBG_LOG("Successfully initialized desc pool.\n");
+
+  // Descriptor Set
+  VkDescriptorSetLayoutBinding dslb = {};
+  dslb.binding = 0;
+  dslb.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  dslb.descriptorCount = 1;
+  dslb.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+  VkDescriptorSetLayoutCreateInfo dslci = {};
+  dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  dslci.pNext = NULL;
+  dslci.bindingCount = 1;
+  dslci.pBindings = &dslb;
+
+  for(uint32_t i = 0; i < FRAME_COUNT; i++) {
+    if(fnCreateDescriptorSetLayout(vulkanLogicalDevice, &dslci, NULL, &(vulkanDescriptorSetLayouts[i])) != VK_SUCCESS) {
+      DBG_LOGERROR("Failed to create desc set layout.\n");
+      return -1;
+    };
+  }
+
+  VkDescriptorSetAllocateInfo dsai = {};
+  dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  dsai.pNext = NULL;
+  dsai.descriptorPool = vulkanDescriptorPool;
+  dsai.descriptorSetCount = FRAME_COUNT;
+  dsai.pSetLayouts = vulkanDescriptorSetLayouts;
+
+  if(fnAllocateDescriptorSets(vulkanLogicalDevice, &dsai, vulkanDescriptorSets) != VK_SUCCESS) {
+    DBG_LOGERROR("Failed to initialize desc sets.\n");
+    return -1;
+  }
+
+  for(uint32_t i = 0; i < FRAME_COUNT; i++) {
+    VkDescriptorBufferInfo dbi = {};
+    dbi.buffer = vulkanFrames[i].ub;
+    dbi.offset = 0;
+    dbi.range = VK_WHOLE_SIZE;
+
+    VkWriteDescriptorSet wds = {};
+    wds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wds.pNext = NULL;
+    wds.dstSet = vulkanDescriptorSets[i];
+    wds.dstBinding = 0;
+    wds.dstArrayElement = 0;
+    wds.descriptorCount = 1;
+    wds.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    wds.pBufferInfo = &dbi;
+
+    fnUpdateDescriptorSets(vulkanLogicalDevice, 1, &wds, 0, NULL);
+  }
+
   // Create the graphics pipeline
   // Load shaders
   size_t fragSize, vertSize; 
@@ -1025,7 +1143,8 @@ int init() {
   plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
   plci.pNext = NULL;
   plci.flags = 0;
-  plci.setLayoutCount = 0;
+  plci.setLayoutCount = 1;
+  plci.pSetLayouts = vulkanDescriptorSetLayouts;
   plci.pushConstantRangeCount = 0;
 
   if(fnCreatePipelineLayout(vulkanLogicalDevice, &plci, NULL, &vulkanPipelineLayout) != VK_SUCCESS) {
@@ -1241,6 +1360,7 @@ int recordCommandBuffer(uint32_t index, uint32_t frame) {
   scissor.offset = {0, 0};
   scissor.extent = vulkanSwapExtent;
   fnCmdSetScissor(vulkanFrames[frame].cb, 0, 1, &scissor);
+  fnCmdBindDescriptorSets(vulkanFrames[frame].cb, VK_PIPELINE_BIND_POINT_GRAPHICS, vulkanPipelineLayout, 0, 1, &vulkanDescriptorSets[frame], 0, NULL);
   fnCmdDraw(vulkanFrames[frame].cb, VERTEX_COUNT, 1, 0, 0);
 
   fnCmdEndRenderPass(vulkanFrames[frame].cb);
@@ -1265,6 +1385,12 @@ int drawFrame(uint32_t frame) {
   fnResetFences(vulkanLogicalDevice, 1, &(vulkanFrames[frame].inFlight));
   fnResetCommandBuffer(vulkanFrames[frame].cb, 0);
   recordCommandBuffer(imageIndex, frame);
+  // Update uniform
+  ViewData vd = {};
+  vd.offset = { -1.0f + (0.1f * (currentFrame % 20)), 0.0f };
+  DBG_LOG("Offset: %f, %f", vd.offset[0], vd.offset[1]);
+  memcpy(vulkanFrames[frame].ubMapped, &vd, sizeof(vd));
+
   VkSubmitInfo submitInfo = {};
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   VkSemaphore waitSemaphores[1] = {vulkanFrames[frame].imgAvlSem};
@@ -1308,6 +1434,8 @@ void cleanupVulkan() {
     fnDestroySemaphore(vulkanLogicalDevice, vulkanFrames[i].rndFnsdSem, NULL);
     fnDestroyFence(vulkanLogicalDevice, vulkanFrames[i].inFlight, NULL);
     fnDestroyCommandPool(vulkanLogicalDevice, vulkanFrames[i].cp, NULL);
+    fnDestroyBuffer(vulkanLogicalDevice, vulkanFrames[i].ub, NULL);
+    fnFreeMemory(vulkanLogicalDevice, vulkanFrames[i].ubMem, NULL);
   }
   fnDestroyCommandPool(vulkanLogicalDevice, vulkanGlobalCB, NULL);
   fnDestroyBuffer(vulkanLogicalDevice, vulkanVertexBuffer, NULL);
@@ -1316,6 +1444,10 @@ void cleanupVulkan() {
     fnDestroyFramebuffer(vulkanLogicalDevice, vulkanFramebuffers[i], NULL);
   }
   free(vulkanFramebuffers);
+  fnDestroyDescriptorPool(vulkanLogicalDevice, vulkanDescriptorPool, NULL);
+  for(uint32_t i = 0; i < FRAME_COUNT; i++) {
+    fnDestroyDescriptorSetLayout(vulkanLogicalDevice, vulkanDescriptorSetLayouts[i], NULL);
+  }
   fnDestroyPipeline(vulkanLogicalDevice, vulkanGraphicsPipeline, NULL);
   fnDestroyRenderPass(vulkanLogicalDevice, vulkanRenderPass, NULL);
   fnDestroyPipelineLayout(vulkanLogicalDevice, vulkanPipelineLayout, NULL);
