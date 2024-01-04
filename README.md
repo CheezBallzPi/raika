@@ -1,3 +1,3 @@
 # Raika
 
-Game Engine
+A game engine
