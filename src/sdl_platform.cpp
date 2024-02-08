@@ -12,15 +12,15 @@
 
 // Debug macros
 #ifdef RAIKA_DEBUG
-#define DBG_LOG(args...) do { \
-    SDL_Log(args); \
+#define DBG_LOG(...) do { \
+    SDL_Log(__VA_ARGS__); \
   } while(0)
-#define DBG_LOGERROR(args...) do { \
-    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, args); \
+#define DBG_LOGERROR(...) do { \
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, __VA_ARGS__); \
   } while(0)
 #else
-#define DBG_LOG(args...) do {} while(0)
-#define DBG_LOGERROR(args...) do{} while(0)
+#define DBG_LOG(...) do {} while(0)
+#define DBG_LOGERROR(...) do{} while(0)
 #endif
 
 // Structs
@@ -51,7 +51,7 @@ static const char *TITLE = "Raika";
 static const char* ACTIVE_VAL_LAYERS[1] = {"VK_LAYER_KHRONOS_validation"};
 static const int ACTIVE_VAL_LAYER_COUNT = 1;
 #else
-static const char* ACTIVE_VAL_LAYERS[0] = {};
+static const char* ACTIVE_VAL_LAYERS[1] = {};
 static const int ACTIVE_VAL_LAYER_COUNT = 0;
 #endif
 static const char* ACTIVE_INST_EXTENSIONS[1] = {
