@@ -8,9 +8,9 @@ Final executable will be created in the `build` folder. Set env variable `RAIKA_
 
 ## Windows
 
-Install $[Visual Studio](https://visualstudio.microsoft.com).
+Install [Visual Studio](https://visualstudio.microsoft.com).
 
-Install the $[Vulkan SDK](https://vulkan.lunarg.com) and run `build_sdl.bat`. When installing the SDK make sure to install SDL2 and GLM with it as the build script looks for them in
+Install the [Vulkan SDK](https://vulkan.lunarg.com) and run `build_sdl.bat`. When installing the SDK make sure to install SDL2 and GLM with it as the build script looks for them in
 the Vulkan SDK directory.
 
 ## Linux
