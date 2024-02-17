@@ -50,7 +50,7 @@ struct ViewData {
 
 // Constants
 static const char *TITLE = "Raika";
-#ifdef RAIKA_DEBUG
+#ifdef VULKAN_DEBUG
 static const char* ACTIVE_VAL_LAYERS[1] = {"VK_LAYER_KHRONOS_validation"};
 static const int ACTIVE_VAL_LAYER_COUNT = 1;
 #else
@@ -82,6 +82,7 @@ static bool windowResized = false;
 static uint32_t currentFrame = 0;
 static std::string basePath = "";
 static SDL_Window *window = NULL;
+static VkPhysicalDeviceProperties vulkanDeviceProperties;
 static VkSurfaceKHR vulkanSurface = NULL;
 static VkSwapchainKHR vulkanSwapchain = NULL;
 static uint32_t vulkanSwapchainImageCount = 0;
@@ -90,6 +91,8 @@ static VkExtent2D vulkanSwapExtent = {};
 static VkImage* vulkanSwapchainImages = NULL;
 static VkImageView* vulkanImageViews = NULL;
 static VkImage vulkanTextureImage = NULL;
+static VkImageView vulkanTextureImageView = NULL;
+static VkSampler vulkanTextureImageSampler = NULL;
 static VkShaderModule vertModule = NULL;
 static VkShaderModule fragModule = NULL;
 static VkRenderPass vulkanRenderPass = NULL;
@@ -151,6 +154,8 @@ static PFN_vkCreateImageView fnCreateImageView = NULL;
 static PFN_vkDestroyImageView fnDestroyImageView = NULL;
 static PFN_vkCreateImage fnCreateImage = NULL;
 static PFN_vkDestroyImage fnDestroyImage = NULL;
+static PFN_vkCreateSampler fnCreateSampler = NULL;
+static PFN_vkDestroySampler fnDestroySampler = NULL;
 static PFN_vkCreateShaderModule fnCreateShaderModule = NULL;
 static PFN_vkDestroyShaderModule fnDestroyShaderModule = NULL;
 static PFN_vkCreatePipelineLayout fnCreatePipelineLayout = NULL;
@@ -231,6 +236,8 @@ int loadVulkanFns() {
   LOAD_VK_FN(vulkanInstance, DestroyImageView);
   LOAD_VK_FN(vulkanInstance, CreateImage);
   LOAD_VK_FN(vulkanInstance, DestroyImage);
+  LOAD_VK_FN(vulkanInstance, CreateSampler);
+  LOAD_VK_FN(vulkanInstance, DestroySampler);
   LOAD_VK_FN(vulkanInstance, CreateShaderModule);
   LOAD_VK_FN(vulkanInstance, DestroyShaderModule);
   LOAD_VK_FN(vulkanInstance, CreatePipelineLayout);
@@ -563,6 +570,32 @@ int initSwapchain() {
   return 0;
 }
 
+int createImageView(VkImage image, VkFormat format, VkImageView* imageView) {
+  VkImageViewCreateInfo ivci = {};
+    ivci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    ivci.pNext = NULL;
+    ivci.flags = 0;
+    ivci.image = image;
+    ivci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    ivci.format = format;
+    ivci.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+    ivci.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+    ivci.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+    ivci.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+    ivci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    ivci.subresourceRange.baseMipLevel = 0;
+    ivci.subresourceRange.levelCount = 1;
+    ivci.subresourceRange.baseArrayLayer = 0;
+    ivci.subresourceRange.layerCount = 1;
+
+    if(fnCreateImageView(vulkanLogicalDevice, &ivci, NULL, imageView) != VK_SUCCESS) {
+      DBG_LOGERROR("Failed to create image view.\n");
+      return -1;
+    };
+
+    return 0;
+}
+
 int initImageViews() {
   // Get images
   if(fnGetSwapchainImagesKHR(vulkanLogicalDevice, vulkanSwapchain, &vulkanSwapchainImageCount, NULL) != VK_SUCCESS) {
@@ -579,27 +612,7 @@ int initImageViews() {
   // Get image views from images
   vulkanImageViews = (VkImageView*) malloc(sizeof(VkImageView) * vulkanSwapchainImageCount);
   for(uint32_t i = 0; i < vulkanSwapchainImageCount; i++) {
-    VkImageViewCreateInfo ivci = {};
-    ivci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    ivci.pNext = NULL;
-    ivci.flags = 0;
-    ivci.image = vulkanSwapchainImages[i];
-    ivci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    ivci.format = swapchainImageFormat;
-    ivci.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-    ivci.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-    ivci.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-    ivci.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-    ivci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    ivci.subresourceRange.baseMipLevel = 0;
-    ivci.subresourceRange.levelCount = 1;
-    ivci.subresourceRange.baseArrayLayer = 0;
-    ivci.subresourceRange.layerCount = 1;
-
-    if(fnCreateImageView(vulkanLogicalDevice, &ivci, NULL, &vulkanImageViews[i]) != VK_SUCCESS) {
-      DBG_LOGERROR("Failed to create image view.\n");
-      return -1;
-    };
+    createImageView(vulkanSwapchainImages[i], swapchainImageFormat, &vulkanImageViews[i]);
   }
   DBG_LOG("Successfully created image views.\n");
   return 0;
@@ -767,7 +780,7 @@ int createImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling 
   return 0;
 }
 
-int createTextureImage(VkImage image, VkDeviceMemory imageMem) {
+int createTextureImage(VkImage* image, VkDeviceMemory* imageMem) {
   int texW, texH, texCh;
   VkBuffer stagingBuffer;
   VkDeviceMemory stagingBufferMemory;
@@ -800,18 +813,46 @@ int createTextureImage(VkImage image, VkDeviceMemory imageMem) {
     VK_IMAGE_TILING_OPTIMAL, 
     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
     VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
-    &image, 
-    &imageMem
+    image, 
+    imageMem
   );
 
-  transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-  copyBufferToImage(stagingBuffer, image, (uint32_t) texW, (uint32_t) texH);
-  transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  transitionImageLayout(*image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+  copyBufferToImage(stagingBuffer, *image, (uint32_t) texW, (uint32_t) texH);
+  transitionImageLayout(*image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   
   fnDestroyBuffer(vulkanLogicalDevice, stagingBuffer, NULL);
   fnFreeMemory(vulkanLogicalDevice, stagingBufferMemory, NULL);
 
   DBG_LOG("Successfully created texture image.\n");
+  return 0;
+}
+
+int createTextureSampler(VkSampler* sampler) {
+  VkSamplerCreateInfo sci = {};
+  sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  sci.pNext = NULL;
+  sci.flags = 0;
+  sci.magFilter = VK_FILTER_NEAREST;
+  sci.minFilter = VK_FILTER_NEAREST;
+  sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  sci.anisotropyEnable = VK_FALSE;
+  sci.maxAnisotropy = 1.0f;
+  sci.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+  sci.unnormalizedCoordinates = VK_FALSE;
+  sci.compareEnable = VK_FALSE;
+  sci.compareOp = VK_COMPARE_OP_ALWAYS;
+  sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+  sci.mipLodBias = 0.0f;
+  sci.minLod = 0.0f;
+  sci.maxLod = 0.0f;
+
+  if(fnCreateSampler(vulkanLogicalDevice, &sci, NULL, sampler) != VK_SUCCESS) {
+    DBG_LOGERROR("Failed to create sampler.\n");
+    return -1;
+  }
   return 0;
 }
 
@@ -1026,12 +1067,11 @@ int init() {
 
   // Check physical device suitability
   for(uint32_t i = 0; i < deviceCount; i++) {
-    VkPhysicalDeviceProperties deviceProperties;
     VkPhysicalDeviceFeatures deviceFeatures;
-    fnGetPhysicalDeviceProperties(devices[i], &deviceProperties);
+    fnGetPhysicalDeviceProperties(devices[i], &vulkanDeviceProperties);
     fnGetPhysicalDeviceFeatures(devices[i], &deviceFeatures);
 
-    DBG_LOG("Checking device: %s\n", deviceProperties.deviceName);
+    DBG_LOG("Checking device: %s\n", vulkanDeviceProperties.deviceName);
 
     // Check extensions
     uint32_t availableDeviceExtensionCount = 0;
@@ -1068,6 +1108,11 @@ int init() {
       SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Extension missing, skipping...\n");
       continue;
     }
+    // For use when using anisotropic filtering
+    // if(!deviceFeatures.samplerAnisotropy) {
+    //   SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Features missing, skipping...\n");
+    //   continue;
+    // }
 
     // Get queue families for the device we found
     uint32_t availableQueueCount = 0;
@@ -1134,9 +1179,12 @@ int init() {
   ldci.queueCreateInfoCount = uniqueQueueFamilyIndex.size();
   ldci.pQueueCreateInfos = qci;
   ldci.enabledExtensionCount = ACTIVE_DEV_EXTENSION_COUNT;
-  ldci.ppEnabledExtensionNames = ACTIVE_DEV_EXTENSIONS
- ;
-  ldci.pEnabledFeatures = NULL; // Enable features here if needed later
+  ldci.ppEnabledExtensionNames = ACTIVE_DEV_EXTENSIONS;
+
+  VkPhysicalDeviceFeatures enabledFeatures = {};
+  // enabledFeatures.samplerAnisotropy = VK_TRUE;
+
+  ldci.pEnabledFeatures = &enabledFeatures; // Enable features here if needed later
   ldci.pNext = NULL;
 
   if((res = fnCreateDevice(vulkanPhysicalDevice, &ldci, NULL, &vulkanLogicalDevice)) != VK_SUCCESS) {
@@ -1527,7 +1575,10 @@ int init() {
   DBG_LOG("Successfully initialized sync objects.\n");
 
   // Textures
-  createTextureImage(vulkanTextureImage, vulkanTextureImageMemory);
+  createTextureImage(&vulkanTextureImage, &vulkanTextureImageMemory);
+  createImageView(vulkanTextureImage, VK_FORMAT_R8G8B8A8_SRGB, &vulkanTextureImageView);
+  createTextureSampler(&vulkanTextureImageSampler);
+
   DBG_LOG("Successfully initialized texture image objects.\n");
 
   DBG_LOG("Successfully initialized Vulkan.\n");
@@ -1644,6 +1695,8 @@ int drawFrame(uint32_t frame) {
 
 void cleanupVulkan() {
   fnDestroyImage(vulkanLogicalDevice, vulkanTextureImage, NULL);
+  fnDestroyImageView(vulkanLogicalDevice, vulkanTextureImageView, NULL);
+  fnDestroySampler(vulkanLogicalDevice, vulkanTextureImageSampler, NULL);
   fnFreeMemory(vulkanLogicalDevice, vulkanTextureImageMemory, NULL);
   for(uint32_t i = 0; i < FRAME_COUNT; i++) {
     fnDestroySemaphore(vulkanLogicalDevice, vulkanFrames[i].imgAvlSem, NULL);
