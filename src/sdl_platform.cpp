@@ -30,6 +30,7 @@
 struct Vertex {
   glm::vec2 pos;
   glm::vec3 color;
+  glm::vec2 texPos;
 };
 
 struct FrameData {
@@ -66,12 +67,13 @@ static const char* ACTIVE_DEV_EXTENSIONS[1] = {
 };
 static const int ACTIVE_DEV_EXTENSION_COUNT = 1;
 static const int FPS = 60;
-static const Vertex VERTICES[3] = {
-  {{0.0f, -0.5f}, {0.5f, 0.5f, 0.0f}},
-  {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-  {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}} 
+static const Vertex VERTICES[4] = {
+  {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+  {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+  {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+  {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
 };
-static const uint32_t VERTEX_COUNT = 3;
+static const uint32_t VERTEX_COUNT = 4;
 static const uint32_t FRAME_COUNT = 2;
 static const uint32_t HEIGHT = 500;
 static const uint32_t WIDTH = 500;
@@ -339,7 +341,7 @@ VkVertexInputBindingDescription* getVibd() {
 }
 
 VkVertexInputAttributeDescription* getViad() {
-  VkVertexInputAttributeDescription* viads = (VkVertexInputAttributeDescription*) malloc(sizeof(VkVertexInputAttributeDescription) * 2);
+  VkVertexInputAttributeDescription* viads = (VkVertexInputAttributeDescription*) malloc(sizeof(VkVertexInputAttributeDescription) * 3);
   // Vertex
   viads[0].binding = 0;
   viads[0].location = 0;
@@ -350,6 +352,11 @@ VkVertexInputAttributeDescription* getViad() {
   viads[1].location = 1;
   viads[1].format = VK_FORMAT_R32G32B32_SFLOAT;
   viads[1].offset = offsetof(Vertex, color);
+  // Tex Pos
+  viads[2].binding = 0;
+  viads[2].location = 2;
+  viads[2].format = VK_FORMAT_R32G32_SFLOAT;
+  viads[2].offset = offsetof(Vertex, texPos);
 
   return viads;
 }
@@ -853,6 +860,8 @@ int createTextureSampler(VkSampler* sampler) {
     DBG_LOGERROR("Failed to create sampler.\n");
     return -1;
   }
+
+  DBG_LOG("Successfully created sampler.\n");
   return 0;
 }
 
@@ -1220,72 +1229,31 @@ int init() {
     fnMapMemory(vulkanLogicalDevice, vulkanFrames[i].ubMem, 0, sizeof(ViewData), 0, &(vulkanFrames[i].ubMapped));
   }
 
-  // Descriptor Pool
-  VkDescriptorPoolSize dps = {};
-  dps.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-  dps.descriptorCount = FRAME_COUNT;
-  VkDescriptorPoolCreateInfo dpci = {};
-  dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-  dpci.pNext = NULL;
-  dpci.poolSizeCount = 1;
-  dpci.pPoolSizes = &dps;
-  dpci.maxSets = FRAME_COUNT;
+  // Descriptor Set Layout
+  uint32_t dsBindingCount = 2;
+  VkDescriptorSetLayoutBinding* dslbs = (VkDescriptorSetLayoutBinding*) malloc(sizeof(VkDescriptorSetLayoutBinding) * dsBindingCount);
+  dslbs[0].binding = 0;
+  dslbs[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  dslbs[0].descriptorCount = 1;
+  dslbs[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-  if(fnCreateDescriptorPool(vulkanLogicalDevice, &dpci, NULL, &vulkanDescriptorPool) != VK_SUCCESS) {
-    DBG_LOGERROR("Failed to initialize desc pool.\n");
-    return -1;
-  }
-  DBG_LOG("Successfully initialized desc pool.\n");
-
-  // Descriptor Set
-  VkDescriptorSetLayoutBinding dslb = {};
-  dslb.binding = 0;
-  dslb.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-  dslb.descriptorCount = 1;
-  dslb.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+  dslbs[1].binding = 1;
+  dslbs[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  dslbs[1].descriptorCount = 1;
+  dslbs[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  dslbs[1].pImmutableSamplers = NULL;
 
   VkDescriptorSetLayoutCreateInfo dslci = {};
   dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
   dslci.pNext = NULL;
-  dslci.bindingCount = 1;
-  dslci.pBindings = &dslb;
+  dslci.bindingCount = dsBindingCount;
+  dslci.pBindings = dslbs;
 
   for(uint32_t i = 0; i < FRAME_COUNT; i++) {
     if(fnCreateDescriptorSetLayout(vulkanLogicalDevice, &dslci, NULL, &(vulkanDescriptorSetLayouts[i])) != VK_SUCCESS) {
       DBG_LOGERROR("Failed to create desc set layout.\n");
       return -1;
     };
-  }
-
-  VkDescriptorSetAllocateInfo dsai = {};
-  dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-  dsai.pNext = NULL;
-  dsai.descriptorPool = vulkanDescriptorPool;
-  dsai.descriptorSetCount = FRAME_COUNT;
-  dsai.pSetLayouts = vulkanDescriptorSetLayouts;
-
-  if(fnAllocateDescriptorSets(vulkanLogicalDevice, &dsai, vulkanDescriptorSets) != VK_SUCCESS) {
-    DBG_LOGERROR("Failed to initialize desc sets.\n");
-    return -1;
-  }
-
-  for(uint32_t i = 0; i < FRAME_COUNT; i++) {
-    VkDescriptorBufferInfo dbi = {};
-    dbi.buffer = vulkanFrames[i].ub;
-    dbi.offset = 0;
-    dbi.range = VK_WHOLE_SIZE;
-
-    VkWriteDescriptorSet wds = {};
-    wds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    wds.pNext = NULL;
-    wds.dstSet = vulkanDescriptorSets[i];
-    wds.dstBinding = 0;
-    wds.dstArrayElement = 0;
-    wds.descriptorCount = 1;
-    wds.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    wds.pBufferInfo = &dbi;
-
-    fnUpdateDescriptorSets(vulkanLogicalDevice, 1, &wds, 0, NULL);
   }
 
   // Create the graphics pipeline
@@ -1344,7 +1312,7 @@ int init() {
   pvisci.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
   pvisci.pNext = NULL;
   pvisci.flags = 0;
-  pvisci.vertexAttributeDescriptionCount = 2;
+  pvisci.vertexAttributeDescriptionCount = 3;
   pvisci.pVertexAttributeDescriptions = getViad();
   pvisci.vertexBindingDescriptionCount = 1;
   pvisci.pVertexBindingDescriptions = getVibd();
@@ -1556,6 +1524,78 @@ int init() {
   fnDestroyBuffer(vulkanLogicalDevice, vulkanStagingBuffer, NULL);
   fnFreeMemory(vulkanLogicalDevice, vulkanStagingDeviceMemory, NULL);
 
+  // Textures
+  createTextureImage(&vulkanTextureImage, &vulkanTextureImageMemory);
+  createImageView(vulkanTextureImage, VK_FORMAT_R8G8B8A8_SRGB, &vulkanTextureImageView);
+  createTextureSampler(&vulkanTextureImageSampler);
+
+  DBG_LOG("Successfully initialized texture image objects.\n");
+
+  // Descriptor Pool
+  VkDescriptorPoolSize* dpss = (VkDescriptorPoolSize*) malloc(sizeof(VkDescriptorPoolSize) * dsBindingCount);
+  dpss[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  dpss[0].descriptorCount = FRAME_COUNT;
+  dpss[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  dpss[1].descriptorCount = FRAME_COUNT;
+  VkDescriptorPoolCreateInfo dpci = {};
+  dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  dpci.pNext = NULL;
+  dpci.poolSizeCount = dsBindingCount;
+  dpci.pPoolSizes = dpss;
+  dpci.maxSets = FRAME_COUNT;
+
+  if(fnCreateDescriptorPool(vulkanLogicalDevice, &dpci, NULL, &vulkanDescriptorPool) != VK_SUCCESS) {
+    DBG_LOGERROR("Failed to initialize desc pool.\n");
+    return -1;
+  }
+  DBG_LOG("Successfully initialized desc pool.\n");
+
+  // Descriptor Set
+  VkDescriptorSetAllocateInfo dsai = {};
+  dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  dsai.pNext = NULL;
+  dsai.descriptorPool = vulkanDescriptorPool;
+  dsai.descriptorSetCount = FRAME_COUNT;
+  dsai.pSetLayouts = vulkanDescriptorSetLayouts;
+
+  if(fnAllocateDescriptorSets(vulkanLogicalDevice, &dsai, vulkanDescriptorSets) != VK_SUCCESS) {
+    DBG_LOGERROR("Failed to initialize desc sets.\n");
+    return -1;
+  }
+
+  for(uint32_t i = 0; i < FRAME_COUNT; i++) {
+    VkDescriptorBufferInfo dbi = {};
+    dbi.buffer = vulkanFrames[i].ub;
+    dbi.offset = 0;
+    dbi.range = VK_WHOLE_SIZE;
+
+    VkDescriptorImageInfo dii = {};
+    dii.sampler = vulkanTextureImageSampler;
+    dii.imageView = vulkanTextureImageView;
+    dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet* wdss = (VkWriteDescriptorSet*) malloc(sizeof(VkWriteDescriptorSet) * dsBindingCount);
+    wdss[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wdss[0].pNext = NULL;
+    wdss[0].dstSet = vulkanDescriptorSets[i];
+    wdss[0].dstBinding = 0;
+    wdss[0].dstArrayElement = 0;
+    wdss[0].descriptorCount = 1;
+    wdss[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    wdss[0].pBufferInfo = &dbi;
+
+    wdss[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wdss[1].pNext = NULL;
+    wdss[1].dstSet = vulkanDescriptorSets[i];
+    wdss[1].dstBinding = 1;
+    wdss[1].dstArrayElement = 0;
+    wdss[1].descriptorCount = 1;
+    wdss[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wdss[1].pImageInfo = &dii;
+
+    fnUpdateDescriptorSets(vulkanLogicalDevice, dsBindingCount, wdss, 0, NULL);
+  }
+
   // Sync
   VkSemaphoreCreateInfo sci = {};
   sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -1573,13 +1613,6 @@ int init() {
     }
   }
   DBG_LOG("Successfully initialized sync objects.\n");
-
-  // Textures
-  createTextureImage(&vulkanTextureImage, &vulkanTextureImageMemory);
-  createImageView(vulkanTextureImage, VK_FORMAT_R8G8B8A8_SRGB, &vulkanTextureImageView);
-  createTextureSampler(&vulkanTextureImageSampler);
-
-  DBG_LOG("Successfully initialized texture image objects.\n");
 
   DBG_LOG("Successfully initialized Vulkan.\n");
   return 0;
