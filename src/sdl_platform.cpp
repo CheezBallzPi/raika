@@ -10,6 +10,9 @@
 #include <string>
 #include <set>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 // Debug macros
 #ifdef RAIKA_DEBUG
 #define DBG_LOG(...) do { \
@@ -86,6 +89,7 @@ static VkFormat swapchainImageFormat = {};
 static VkExtent2D vulkanSwapExtent = {};
 static VkImage* vulkanSwapchainImages = NULL;
 static VkImageView* vulkanImageViews = NULL;
+static VkImage vulkanTextureImage = NULL;
 static VkShaderModule vertModule = NULL;
 static VkShaderModule fragModule = NULL;
 static VkRenderPass vulkanRenderPass = NULL;
@@ -101,6 +105,7 @@ static VkBuffer vulkanStagingBuffer = NULL;
 static VkBuffer vulkanVertexBuffer = NULL;
 static VkDeviceMemory vulkanStagingDeviceMemory = NULL;
 static VkDeviceMemory vulkanVertexDeviceMemory = NULL;
+static VkDeviceMemory vulkanTextureImageMemory = NULL;
 static VkInstance vulkanInstance = NULL;
 static VkDevice vulkanLogicalDevice = NULL;
 static VkQueue vulkanGraphicsQueue = NULL;
@@ -144,6 +149,8 @@ static PFN_vkDestroySwapchainKHR fnDestroySwapchainKHR = NULL;
 static PFN_vkGetSwapchainImagesKHR fnGetSwapchainImagesKHR = NULL;
 static PFN_vkCreateImageView fnCreateImageView = NULL;
 static PFN_vkDestroyImageView fnDestroyImageView = NULL;
+static PFN_vkCreateImage fnCreateImage = NULL;
+static PFN_vkDestroyImage fnDestroyImage = NULL;
 static PFN_vkCreateShaderModule fnCreateShaderModule = NULL;
 static PFN_vkDestroyShaderModule fnDestroyShaderModule = NULL;
 static PFN_vkCreatePipelineLayout fnCreatePipelineLayout = NULL;
@@ -169,6 +176,7 @@ static PFN_vkFreeMemory fnFreeMemory = NULL;
 static PFN_vkMapMemory fnMapMemory = NULL;
 static PFN_vkUnmapMemory fnUnmapMemory = NULL;
 static PFN_vkBindBufferMemory fnBindBufferMemory = NULL;
+static PFN_vkBindImageMemory fnBindImageMemory = NULL;
 static PFN_vkBeginCommandBuffer fnBeginCommandBuffer = NULL;
 static PFN_vkCmdBeginRenderPass fnCmdBeginRenderPass = NULL;
 static PFN_vkCmdBindPipeline fnCmdBindPipeline = NULL;
@@ -177,8 +185,10 @@ static PFN_vkCmdBindDescriptorSets fnCmdBindDescriptorSets = NULL;
 static PFN_vkCmdSetViewport fnCmdSetViewport = NULL;
 static PFN_vkCmdSetScissor fnCmdSetScissor = NULL;
 static PFN_vkCmdCopyBuffer fnCmdCopyBuffer = NULL;
+static PFN_vkCmdCopyBufferToImage fnCmdCopyBufferToImage = NULL;
 static PFN_vkCmdDraw fnCmdDraw = NULL;
 static PFN_vkCmdEndRenderPass fnCmdEndRenderPass = NULL;
+static PFN_vkCmdPipelineBarrier fnCmdPipelineBarrier = NULL;
 static PFN_vkEndCommandBuffer fnEndCommandBuffer = NULL;
 static PFN_vkResetCommandBuffer fnResetCommandBuffer = NULL;
 static PFN_vkCreateSemaphore fnCreateSemaphore = NULL;
@@ -195,6 +205,7 @@ static PFN_vkQueueWaitIdle fnQueueWaitIdle = NULL;
 static PFN_vkCreateBuffer fnCreateBuffer = NULL;
 static PFN_vkDestroyBuffer fnDestroyBuffer = NULL;
 static PFN_vkGetBufferMemoryRequirements fnGetBufferMemoryRequirements = NULL;
+static PFN_vkGetImageMemoryRequirements fnGetImageMemoryRequirements = NULL;
 
 int loadVulkanFns() {
   // Load functions
@@ -218,6 +229,8 @@ int loadVulkanFns() {
   LOAD_VK_FN(vulkanInstance, GetSwapchainImagesKHR);
   LOAD_VK_FN(vulkanInstance, CreateImageView);
   LOAD_VK_FN(vulkanInstance, DestroyImageView);
+  LOAD_VK_FN(vulkanInstance, CreateImage);
+  LOAD_VK_FN(vulkanInstance, DestroyImage);
   LOAD_VK_FN(vulkanInstance, CreateShaderModule);
   LOAD_VK_FN(vulkanInstance, DestroyShaderModule);
   LOAD_VK_FN(vulkanInstance, CreatePipelineLayout);
@@ -243,6 +256,7 @@ int loadVulkanFns() {
   LOAD_VK_FN(vulkanInstance, MapMemory);
   LOAD_VK_FN(vulkanInstance, UnmapMemory);
   LOAD_VK_FN(vulkanInstance, BindBufferMemory);
+  LOAD_VK_FN(vulkanInstance, BindImageMemory);
   LOAD_VK_FN(vulkanInstance, BeginCommandBuffer);
   LOAD_VK_FN(vulkanInstance, CmdBeginRenderPass);
   LOAD_VK_FN(vulkanInstance, CmdBindPipeline);
@@ -251,8 +265,10 @@ int loadVulkanFns() {
   LOAD_VK_FN(vulkanInstance, CmdSetViewport);
   LOAD_VK_FN(vulkanInstance, CmdSetScissor);
   LOAD_VK_FN(vulkanInstance, CmdCopyBuffer);
+  LOAD_VK_FN(vulkanInstance, CmdCopyBufferToImage);
   LOAD_VK_FN(vulkanInstance, CmdDraw);
   LOAD_VK_FN(vulkanInstance, CmdEndRenderPass);
+  LOAD_VK_FN(vulkanInstance, CmdPipelineBarrier);
   LOAD_VK_FN(vulkanInstance, EndCommandBuffer);
   LOAD_VK_FN(vulkanInstance, ResetCommandBuffer);
   LOAD_VK_FN(vulkanInstance, CreateSemaphore);
@@ -269,17 +285,42 @@ int loadVulkanFns() {
   LOAD_VK_FN(vulkanInstance, CreateBuffer);
   LOAD_VK_FN(vulkanInstance, DestroyBuffer);
   LOAD_VK_FN(vulkanInstance, GetBufferMemoryRequirements);
+  LOAD_VK_FN(vulkanInstance, GetImageMemoryRequirements);
   return 0;
 }
 
+#ifdef VULKAN_DEBUG
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
   VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
   VkDebugUtilsMessageTypeFlagsEXT messageTypes,
   const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
   void* pUserData
 ) {
-  DBG_LOG("[DBG]: %s\n", pCallbackData->pMessage);
+  SDL_Log("[DBG]: %s\n", pCallbackData->pMessage);
   return VK_FALSE;
+}
+#else
+VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
+  VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+  VkDebugUtilsMessageTypeFlagsEXT messageTypes,
+  const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+  void* pUserData
+) {
+  return VK_FALSE;
+}
+#endif
+
+uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+  VkPhysicalDeviceMemoryProperties pdmp;
+  fnGetPhysicalDeviceMemoryProperties(vulkanPhysicalDevice, &pdmp);
+  for(uint32_t i = 0; i < pdmp.memoryTypeCount; i++) {
+    if(typeFilter & (1 << i) && (pdmp.memoryTypes[i].propertyFlags & properties) == properties) {
+      return i;
+    }
+  }
+
+  DBG_LOGERROR("Failed to find memory type.\n");
+  return -1;
 }
 
 VkVertexInputBindingDescription* getVibd() {
@@ -306,39 +347,80 @@ VkVertexInputAttributeDescription* getViad() {
   return viads;
 }
 
-int copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size) {
-  VkCommandBuffer cb;
+int beginSingleCommandBuffer(VkCommandBuffer* cb) {
   VkCommandBufferAllocateInfo cbai = {};
   cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
   cbai.pNext = NULL;
   cbai.commandBufferCount = 1;
   cbai.commandPool = vulkanGlobalCB;
   cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-  if(fnAllocateCommandBuffers(vulkanLogicalDevice, &cbai, &cb) != VK_SUCCESS) {
+  if(fnAllocateCommandBuffers(vulkanLogicalDevice, &cbai, cb) != VK_SUCCESS) {
     DBG_LOGERROR("Failed to make copy buffer cb.\n");
   }
   VkCommandBufferBeginInfo cbbi = {};
   cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   cbbi.pNext = NULL;
   cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  fnBeginCommandBuffer(cb, &cbbi);
-  VkBufferCopy bc = {};
-  bc.size = size;
-  bc.srcOffset = 0;
-  bc.dstOffset = 0;
-  fnCmdCopyBuffer(cb, src, dst, 1, &bc);
-  fnEndCommandBuffer(cb);
+  fnBeginCommandBuffer(*cb, &cbbi);
+
+  return 0;
+}
+
+int endSingleCommandBuffer(VkCommandBuffer* cb) {
+  fnEndCommandBuffer(*cb);
   VkSubmitInfo si = {};
   si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   si.pNext = NULL;
   si.commandBufferCount = 1;
-  si.pCommandBuffers = &cb;
+  si.pCommandBuffers = cb;
   if(fnQueueSubmit(vulkanGraphicsQueue, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS) {
     DBG_LOGERROR("Failed to submit copy buffer queue.\n");
     return -1;
   };
   fnQueueWaitIdle(vulkanGraphicsQueue);
-  fnFreeCommandBuffers(vulkanLogicalDevice, vulkanGlobalCB, 1, &cb);
+  fnFreeCommandBuffers(vulkanLogicalDevice, vulkanGlobalCB, 1, cb);
+
+  return 0;
+}
+
+int copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size) {
+  VkCommandBuffer cb;
+  beginSingleCommandBuffer(&cb);
+
+  VkBufferCopy bc = {};
+  bc.size = size;
+  bc.srcOffset = 0;
+  bc.dstOffset = 0;
+  fnCmdCopyBuffer(cb, src, dst, 1, &bc);
+
+  endSingleCommandBuffer(&cb);
+  return 0;
+}
+
+int copyBufferToImage(VkBuffer src, VkImage dst, uint32_t width, uint32_t height) {
+  VkCommandBuffer cb;
+  beginSingleCommandBuffer(&cb);
+
+  VkBufferImageCopy bic = {};
+  bic.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  bic.imageSubresource.baseArrayLayer = 0;
+  bic.imageSubresource.layerCount = 1;
+  bic.imageSubresource.mipLevel = 0;
+
+  bic.imageExtent.width = width;
+  bic.imageExtent.height = height;
+  bic.imageExtent.depth = 1;
+  bic.imageOffset.x = 0;
+  bic.imageOffset.y = 0;
+  bic.imageOffset.z = 0;
+
+  bic.bufferOffset = 0;
+  bic.bufferImageHeight = 0;
+  bic.bufferRowLength = 0;
+
+  fnCmdCopyBufferToImage(cb, src, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bic);
+
+  endSingleCommandBuffer(&cb);
   return 0;
 }
 
@@ -570,7 +652,7 @@ int createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFl
   bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   bci.pNext = NULL;
   bci.flags = 0;
-  bci.size = sizeof(Vertex) * VERTEX_COUNT;
+  bci.size = size;
   bci.usage = usage;
   bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   if(fnCreateBuffer(vulkanLogicalDevice, &bci, NULL, buffer) != VK_SUCCESS) {
@@ -579,30 +661,157 @@ int createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFl
   }
   VkMemoryRequirements mr;
   fnGetBufferMemoryRequirements(vulkanLogicalDevice, *buffer, &mr);
-  VkPhysicalDeviceMemoryProperties pdmp;
-  fnGetPhysicalDeviceMemoryProperties(vulkanPhysicalDevice, &pdmp);
   VkMemoryAllocateInfo ai = {};
   ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
   ai.pNext = NULL;
   ai.allocationSize = mr.size;
-  bool memoryTypeFound = false;  
-  for(uint32_t i = 0; i < pdmp.memoryTypeCount; i++) {
-    if(mr.memoryTypeBits & (1 << i) &&
-       (pdmp.memoryTypes[i].propertyFlags & propertyFlags) == propertyFlags) {
-      ai.memoryTypeIndex = i;
-      memoryTypeFound = true;
-    }
-  }
-  if(!memoryTypeFound) {
-    DBG_LOGERROR("Failed to find memory type.\n");
-    return -1;
-  }
+  ai.memoryTypeIndex = findMemoryType(mr.memoryTypeBits, propertyFlags);
+
   if(fnAllocateMemory(vulkanLogicalDevice, &ai, NULL, devMem) != VK_SUCCESS) {
     DBG_LOGERROR("Failed to allocate memory.\n");
     return -1;
   };
-  fnBindBufferMemory(vulkanLogicalDevice, *buffer, *devMem, 0);
+  if(fnBindBufferMemory(vulkanLogicalDevice, *buffer, *devMem, 0) != VK_SUCCESS) {
+    DBG_LOGERROR("Failed to bind buffer to memory.\n");
+    return -1;
+  };
   DBG_LOG("Successfully allocated memory.\n");
+  return 0;
+}
+
+int transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout) {
+  VkCommandBuffer cb = NULL;
+  beginSingleCommandBuffer(&cb);
+
+  VkPipelineStageFlags srcStage, dstStage;
+
+  VkImageMemoryBarrier imb = {};
+  imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  imb.pNext = NULL;
+  imb.image = image;
+  imb.oldLayout = oldLayout;
+  imb.newLayout = newLayout;
+  imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  imb.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  imb.subresourceRange.baseArrayLayer = 0;
+  imb.subresourceRange.baseMipLevel = 0;
+  imb.subresourceRange.layerCount = 1;
+  imb.subresourceRange.levelCount = 1;
+  
+  if(oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+    imb.srcAccessMask = 0;
+    imb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+    srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+  } else if(oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+    imb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    imb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+  } else {
+    imb.srcAccessMask = 0;
+    imb.dstAccessMask = 0;
+
+    srcStage = 0;
+    dstStage = 0;
+  }
+
+  fnCmdPipelineBarrier(cb, srcStage, dstStage, 0, 0, NULL, 0, NULL, 1, &imb);
+
+  endSingleCommandBuffer(&cb);
+
+  return 0;
+}
+
+int createImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling, 
+                VkMemoryPropertyFlags properties, VkImageUsageFlags usage, VkImage* image, VkDeviceMemory* imageMem) {
+  VkImageCreateInfo ici = {};
+  ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  ici.pNext = NULL;
+  ici.flags = 0;
+  ici.imageType = VK_IMAGE_TYPE_2D;
+  ici.extent.width = width;
+  ici.extent.height = height;
+  ici.extent.depth = 1;
+  ici.mipLevels = 1;
+  ici.arrayLayers = 1;
+  ici.format = format;
+  ici.tiling = tiling;
+  ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  ici.usage = usage;
+  ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  ici.samples = VK_SAMPLE_COUNT_1_BIT;
+
+  if(fnCreateImage(vulkanLogicalDevice, &ici, NULL, image) != VK_SUCCESS) {
+    DBG_LOGERROR("Failed to create vulkan image texture.\n");
+    return -1;
+  }
+
+  VkMemoryRequirements mr;
+  fnGetImageMemoryRequirements(vulkanLogicalDevice, *image, &mr);
+  VkMemoryAllocateInfo mai = {};
+  mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  mai.pNext = NULL;
+  mai.allocationSize = mr.size;
+  mai.memoryTypeIndex = findMemoryType(mr.memoryTypeBits, properties);
+
+  if(fnAllocateMemory(vulkanLogicalDevice, &mai, NULL, imageMem) != VK_SUCCESS) {
+    DBG_LOGERROR("Failed to allocate image memory.\n");
+    return -1;
+  };
+  fnBindImageMemory(vulkanLogicalDevice, *image, *imageMem, 0);
+  DBG_LOG("Successfully created image.\n");
+  return 0;
+}
+
+int createTextureImage(VkImage image, VkDeviceMemory imageMem) {
+  int texW, texH, texCh;
+  VkBuffer stagingBuffer;
+  VkDeviceMemory stagingBufferMemory;
+
+  stbi_uc* pixels = stbi_load((basePath + "../textures/texture.png").c_str(), &texW, &texH, &texCh, STBI_rgb_alpha);
+  VkDeviceSize imageSize = texW * texH * 4;
+
+  if(!pixels) {
+    DBG_LOGERROR("Failed to load image texture.\n");
+    return -1;
+  }
+
+  createBuffer(
+    imageSize, 
+    VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
+    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+    &stagingBuffer,
+    &stagingBufferMemory
+  );
+
+  void* data;
+  fnMapMemory(vulkanLogicalDevice, stagingBufferMemory, 0, imageSize, 0, &data);
+  memcpy(data, pixels, (size_t) imageSize);
+  fnUnmapMemory(vulkanLogicalDevice, stagingBufferMemory);
+  stbi_image_free(pixels);
+
+  createImage(
+    (uint32_t) texW, (uint32_t) texH, 
+    VK_FORMAT_R8G8B8A8_SRGB, 
+    VK_IMAGE_TILING_OPTIMAL, 
+    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
+    VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
+    &image, 
+    &imageMem
+  );
+
+  transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+  copyBufferToImage(stagingBuffer, image, (uint32_t) texW, (uint32_t) texH);
+  transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  
+  fnDestroyBuffer(vulkanLogicalDevice, stagingBuffer, NULL);
+  fnFreeMemory(vulkanLogicalDevice, stagingBufferMemory, NULL);
+
+  DBG_LOG("Successfully created texture image.\n");
   return 0;
 }
 
@@ -916,6 +1125,7 @@ int init() {
     qci[j].queueCount = 1;
     qci[j].pQueuePriorities = priorities;
     qci[j].pNext = NULL;
+    qci[j].flags = 0;
     j++;
   }
 
@@ -1316,6 +1526,10 @@ int init() {
   }
   DBG_LOG("Successfully initialized sync objects.\n");
 
+  // Textures
+  createTextureImage(vulkanTextureImage, vulkanTextureImageMemory);
+  DBG_LOG("Successfully initialized texture image objects.\n");
+
   DBG_LOG("Successfully initialized Vulkan.\n");
   return 0;
 }
@@ -1387,7 +1601,7 @@ int drawFrame(uint32_t frame) {
   recordCommandBuffer(imageIndex, frame);
   // Update uniform
   ViewData vd = {};
-  vd.offset = { -1.0f + (0.1f * (currentFrame % 20)), 0.0f };
+  vd.offset = { -1.0f + (0.02f * (currentFrame % 100)), 0.0f };
   DBG_LOG("Offset: %f, %f", vd.offset[0], vd.offset[1]);
   memcpy(vulkanFrames[frame].ubMapped, &vd, sizeof(vd));
 
@@ -1429,6 +1643,8 @@ int drawFrame(uint32_t frame) {
 }
 
 void cleanupVulkan() {
+  fnDestroyImage(vulkanLogicalDevice, vulkanTextureImage, NULL);
+  fnFreeMemory(vulkanLogicalDevice, vulkanTextureImageMemory, NULL);
   for(uint32_t i = 0; i < FRAME_COUNT; i++) {
     fnDestroySemaphore(vulkanLogicalDevice, vulkanFrames[i].imgAvlSem, NULL);
     fnDestroySemaphore(vulkanLogicalDevice, vulkanFrames[i].rndFnsdSem, NULL);
