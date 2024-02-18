@@ -2,7 +2,12 @@
 #include <SDL2/SDL_vulkan.h>
 #include <vulkan/vulkan.h>
 
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_FORCE_LEFT_HANDED
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/string_cast.hpp>
 
 #include <stdlib.h>
 #include <malloc.h>
@@ -28,7 +33,7 @@
 
 // Structs
 struct Vertex {
-  glm::vec2 pos;
+  glm::vec3 pos;
   glm::vec3 color;
   glm::vec2 texPos;
 };
@@ -46,7 +51,9 @@ struct FrameData {
 };
 
 struct ViewData {
-  glm::vec2 offset;
+  glm::mat4 model;
+  glm::mat4 view;
+  glm::mat4 proj;
 };
 
 // Constants
@@ -67,13 +74,23 @@ static const char* ACTIVE_DEV_EXTENSIONS[1] = {
 };
 static const int ACTIVE_DEV_EXTENSION_COUNT = 1;
 static const int FPS = 60;
-static const Vertex VERTICES[4] = {
-  {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-  {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-  {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-  {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
+static const Vertex VERTICES[8] = {
+  {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
+  {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
+  {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+  {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
+
+  {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
+  {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
+  {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+  {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}
 };
-static const uint32_t VERTEX_COUNT = 4;
+static const uint32_t INDICES[12] = {
+  0, 1, 2, 2, 3, 0,
+  4, 5, 6, 6, 7, 4
+};
+static const uint32_t VERTEX_COUNT = 8;
+static const uint32_t INDEX_COUNT = 12;
 static const uint32_t FRAME_COUNT = 2;
 static const uint32_t HEIGHT = 500;
 static const uint32_t WIDTH = 500;
@@ -106,10 +123,10 @@ static VkPipeline vulkanGraphicsPipeline = NULL;
 static VkCommandPool vulkanGlobalCB = NULL;
 static FrameData vulkanFrames[FRAME_COUNT] = {};
 static VkFramebuffer* vulkanFramebuffers = NULL;
-static VkBuffer vulkanStagingBuffer = NULL;
 static VkBuffer vulkanVertexBuffer = NULL;
-static VkDeviceMemory vulkanStagingDeviceMemory = NULL;
+static VkBuffer vulkanIndexBuffer = NULL;
 static VkDeviceMemory vulkanVertexDeviceMemory = NULL;
+static VkDeviceMemory vulkanIndexDeviceMemory = NULL;
 static VkDeviceMemory vulkanTextureImageMemory = NULL;
 static VkInstance vulkanInstance = NULL;
 static VkDevice vulkanLogicalDevice = NULL;
@@ -188,12 +205,13 @@ static PFN_vkBeginCommandBuffer fnBeginCommandBuffer = NULL;
 static PFN_vkCmdBeginRenderPass fnCmdBeginRenderPass = NULL;
 static PFN_vkCmdBindPipeline fnCmdBindPipeline = NULL;
 static PFN_vkCmdBindVertexBuffers fnCmdBindVertexBuffers = NULL;
+static PFN_vkCmdBindIndexBuffer fnCmdBindIndexBuffer = NULL;
 static PFN_vkCmdBindDescriptorSets fnCmdBindDescriptorSets = NULL;
 static PFN_vkCmdSetViewport fnCmdSetViewport = NULL;
 static PFN_vkCmdSetScissor fnCmdSetScissor = NULL;
 static PFN_vkCmdCopyBuffer fnCmdCopyBuffer = NULL;
 static PFN_vkCmdCopyBufferToImage fnCmdCopyBufferToImage = NULL;
-static PFN_vkCmdDraw fnCmdDraw = NULL;
+static PFN_vkCmdDrawIndexed fnCmdDrawIndexed = NULL;
 static PFN_vkCmdEndRenderPass fnCmdEndRenderPass = NULL;
 static PFN_vkCmdPipelineBarrier fnCmdPipelineBarrier = NULL;
 static PFN_vkEndCommandBuffer fnEndCommandBuffer = NULL;
@@ -270,12 +288,13 @@ int loadVulkanFns() {
   LOAD_VK_FN(vulkanInstance, CmdBeginRenderPass);
   LOAD_VK_FN(vulkanInstance, CmdBindPipeline);
   LOAD_VK_FN(vulkanInstance, CmdBindVertexBuffers);
+  LOAD_VK_FN(vulkanInstance, CmdBindIndexBuffer);
   LOAD_VK_FN(vulkanInstance, CmdBindDescriptorSets);
   LOAD_VK_FN(vulkanInstance, CmdSetViewport);
   LOAD_VK_FN(vulkanInstance, CmdSetScissor);
   LOAD_VK_FN(vulkanInstance, CmdCopyBuffer);
   LOAD_VK_FN(vulkanInstance, CmdCopyBufferToImage);
-  LOAD_VK_FN(vulkanInstance, CmdDraw);
+  LOAD_VK_FN(vulkanInstance, CmdDrawIndexed);
   LOAD_VK_FN(vulkanInstance, CmdEndRenderPass);
   LOAD_VK_FN(vulkanInstance, CmdPipelineBarrier);
   LOAD_VK_FN(vulkanInstance, EndCommandBuffer);
@@ -345,7 +364,7 @@ VkVertexInputAttributeDescription* getViad() {
   // Vertex
   viads[0].binding = 0;
   viads[0].location = 0;
-  viads[0].format = VK_FORMAT_R32G32_SFLOAT;
+  viads[0].format = VK_FORMAT_R32G32B32_SFLOAT;
   viads[0].offset = offsetof(Vertex, pos);
   // Color
   viads[1].binding = 0;
@@ -487,8 +506,9 @@ int initSwapchain() {
   // Determine surface format
   bool foundFormat = false;
   for(uint32_t i = 0; i < formatCount; i++) {
+    DBG_LOG("Available Format: %d (%d)", formats[i].format, formats[i].colorSpace);
     if(
-      formats[i].format == VK_FORMAT_B8G8R8_SRGB &&
+      formats[i].format == VK_FORMAT_B8G8R8A8_SRGB &&
       formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
     ) {
       vulkanSurfaceFormat = formats[i];
@@ -500,7 +520,7 @@ int initSwapchain() {
   }
   // Set format to be used in imageviews
   swapchainImageFormat = vulkanSurfaceFormat.format;
-
+  DBG_LOG("Set Format: %d", swapchainImageFormat);
   // Presentation mode
   for(uint32_t i = 0; i < presentModeCount; i++) {
     if(presentModes[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
@@ -699,6 +719,41 @@ int createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFl
   return 0;
 }
 
+int createDoubleBuffer(VkBuffer* buffer, VkDeviceMemory* devMem, VkDeviceSize size, void* data, VkBufferUsageFlags usage, VkMemoryPropertyFlags propertyFlags) {
+  VkBuffer stagingBuffer = NULL;
+  VkDeviceMemory stagingDevMem = NULL;
+  if(createBuffer(
+      size,
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+      &stagingBuffer,
+      &stagingDevMem
+     ) != 0) {
+    DBG_LOGERROR("Failed to initialize staging buffer.\n");
+    return -1;
+  }
+  if(createBuffer(
+      size,
+      usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+      propertyFlags,
+      buffer,
+      devMem
+     ) != 0) {
+    DBG_LOGERROR("Failed to initialize vertex buffer.\n");
+    return -1;
+  }
+
+  void* stgMem;
+  fnMapMemory(vulkanLogicalDevice, stagingDevMem, 0, size, 0, &stgMem);
+  memcpy(stgMem, data, (size_t) size);
+  fnUnmapMemory(vulkanLogicalDevice, stagingDevMem);
+  copyBuffer(stagingBuffer, *buffer, size);
+  fnDestroyBuffer(vulkanLogicalDevice, stagingBuffer, NULL);
+  fnFreeMemory(vulkanLogicalDevice, stagingDevMem, NULL);
+
+  return 0;
+}
+
 int transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout) {
   VkCommandBuffer cb = NULL;
   beginSingleCommandBuffer(&cb);
@@ -792,7 +847,7 @@ int createTextureImage(VkImage* image, VkDeviceMemory* imageMem) {
   VkBuffer stagingBuffer;
   VkDeviceMemory stagingBufferMemory;
 
-  stbi_uc* pixels = stbi_load((basePath + "../textures/texture.png").c_str(), &texW, &texH, &texCh, STBI_rgb_alpha);
+  stbi_uc* pixels = stbi_load((basePath + "../textures/texture.bmp").c_str(), &texW, &texH, &texCh, STBI_rgb_alpha);
   VkDeviceSize imageSize = texW * texH * 4;
 
   if(!pixels) {
@@ -1495,34 +1550,11 @@ int init() {
 
   // Vertex Buffer
   VkDeviceSize vertBufferSize = sizeof(Vertex) * VERTEX_COUNT;
-  if(createBuffer(
-      vertBufferSize,
-      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-      &vulkanStagingBuffer,
-      &vulkanStagingDeviceMemory
-     ) != 0) {
-    DBG_LOGERROR("Failed to initialize staging buffer.\n");
-    return -1;
-  }
-  if(createBuffer(
-      vertBufferSize,
-      VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-      &vulkanVertexBuffer,
-      &vulkanVertexDeviceMemory
-     ) != 0) {
-    DBG_LOGERROR("Failed to initialize vertex buffer.\n");
-    return -1;
-  }
+  createDoubleBuffer(&vulkanVertexBuffer, &vulkanVertexDeviceMemory, vertBufferSize, (void*) VERTICES, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-  void* stgMem;
-  fnMapMemory(vulkanLogicalDevice, vulkanStagingDeviceMemory, 0, vertBufferSize, 0, &stgMem);
-  memcpy(stgMem, VERTICES, (size_t) vertBufferSize);
-  fnUnmapMemory(vulkanLogicalDevice, vulkanStagingDeviceMemory);
-  copyBuffer(vulkanStagingBuffer, vulkanVertexBuffer, vertBufferSize);
-  fnDestroyBuffer(vulkanLogicalDevice, vulkanStagingBuffer, NULL);
-  fnFreeMemory(vulkanLogicalDevice, vulkanStagingDeviceMemory, NULL);
+  // Index Buffer
+  VkDeviceSize indexBufferSize = sizeof(uint32_t) * INDEX_COUNT;
+  createDoubleBuffer(&vulkanIndexBuffer, &vulkanIndexDeviceMemory, indexBufferSize, (void*) INDICES, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
   // Textures
   createTextureImage(&vulkanTextureImage, &vulkanTextureImageMemory);
@@ -1644,6 +1676,7 @@ int recordCommandBuffer(uint32_t index, uint32_t frame) {
   VkBuffer vertBuffers[1] = {vulkanVertexBuffer};
   VkDeviceSize offsets[1] = {0};
   fnCmdBindVertexBuffers(vulkanFrames[frame].cb, 0, 1, vertBuffers, offsets);
+  fnCmdBindIndexBuffer(vulkanFrames[frame].cb, vulkanIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
   VkViewport viewport = {};
   viewport.x = 0.0f;
@@ -1659,7 +1692,7 @@ int recordCommandBuffer(uint32_t index, uint32_t frame) {
   scissor.extent = vulkanSwapExtent;
   fnCmdSetScissor(vulkanFrames[frame].cb, 0, 1, &scissor);
   fnCmdBindDescriptorSets(vulkanFrames[frame].cb, VK_PIPELINE_BIND_POINT_GRAPHICS, vulkanPipelineLayout, 0, 1, &vulkanDescriptorSets[frame], 0, NULL);
-  fnCmdDraw(vulkanFrames[frame].cb, VERTEX_COUNT, 1, 0, 0);
+  fnCmdDrawIndexed(vulkanFrames[frame].cb, INDEX_COUNT, 1, 0, 0, 0);
 
   fnCmdEndRenderPass(vulkanFrames[frame].cb);
   if(fnEndCommandBuffer(vulkanFrames[frame].cb) != VK_SUCCESS) {
@@ -1685,8 +1718,12 @@ int drawFrame(uint32_t frame) {
   recordCommandBuffer(imageIndex, frame);
   // Update uniform
   ViewData vd = {};
-  vd.offset = { -1.0f + (0.02f * (currentFrame % 100)), 0.0f };
-  DBG_LOG("Offset: %f, %f", vd.offset[0], vd.offset[1]);
+
+  vd.model = glm::rotate(glm::mat4(1.0f), glm::radians(currentFrame + 90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+  vd.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+  vd.proj = glm::perspective(glm::radians(45.0f), vulkanSwapExtent.width / (float) vulkanSwapExtent.height, 0.1f, 10.0f);
+  vd.proj[1][1] *= -1;
+
   memcpy(vulkanFrames[frame].ubMapped, &vd, sizeof(vd));
 
   VkSubmitInfo submitInfo = {};
@@ -1742,6 +1779,8 @@ void cleanupVulkan() {
   fnDestroyCommandPool(vulkanLogicalDevice, vulkanGlobalCB, NULL);
   fnDestroyBuffer(vulkanLogicalDevice, vulkanVertexBuffer, NULL);
   fnFreeMemory(vulkanLogicalDevice, vulkanVertexDeviceMemory, NULL);
+  fnDestroyBuffer(vulkanLogicalDevice, vulkanIndexBuffer, NULL);
+  fnFreeMemory(vulkanLogicalDevice, vulkanIndexDeviceMemory, NULL);
   for(uint32_t i = 0; i < vulkanSwapchainImageCount; i++) {
     fnDestroyFramebuffer(vulkanLogicalDevice, vulkanFramebuffers[i], NULL);
   }
